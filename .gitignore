@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+# Postman environment files hold the API key once filled in locally
+*.postman_environment.json
 
 # vercel
 .vercel
