@@ -1,17 +1,28 @@
+import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { disconnectAccount } from "@/lib/uniflow";
+import { disconnectAccount, getReturnUrl } from "@/lib/uniflow";
+import { logger } from "@/lib/logger";
 
-export async function POST(request: Request) {
+export async function POST() {
+  const requestId = randomUUID();
+  const appOrigin = new URL(getReturnUrl()).origin;
   const session = await getSession();
-  if (session.uniflowAccountId) {
+  const accountId = session.uniflowAccountId;
+
+  if (accountId) {
     try {
-      await disconnectAccount(session.uniflowAccountId);
-    } catch {
-      // Still clear the local session even if the delete call fails
-      // (e.g. the account was already removed).
+      // Deliberately deletes the upstream LinkToAny account record, not just
+      // the local session - "Disconnect" should actually sever the
+      // connection, so reconnecting always goes through OAuth again rather
+      // than silently reusing a still-live account.
+      await disconnectAccount(accountId);
+    } catch (err) {
+      logger.error("square.disconnect.failed", { requestId, accountId, err });
     }
   }
   session.destroy();
-  return NextResponse.redirect(new URL("/", request.url));
+  // 303, not the default 307: this request is a POST, and a 307 would make
+  // the browser re-POST to "/", which has no POST handler.
+  return NextResponse.redirect(new URL("/", appOrigin), 303);
 }

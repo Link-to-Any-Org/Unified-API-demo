@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      UNIFLOW_API_KEY: ci-placeholder
+      UNIFLOW_ENVIRONMENT: dev
+      UNIFLOW_SQUARE_SYSTEM_ID: ci-placeholder
+      UNIFLOW_RETURN_URL: https://ci.example.com/api/square/callback
+      SESSION_SECRET: ci-placeholder-ci-placeholder-ci-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

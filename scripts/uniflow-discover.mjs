@@ -1,6 +1,6 @@
 // One-off discovery script: finds Square's systemId/application slug on the
-// Unified API and prints the exact unified schema for the 'products' and
-// 'orders' entities, so the app's field mapping can be confirmed instead of
+// Unified API and prints the exact unified schema for the 'item' and
+// 'order' entities, so the app's field mapping can be confirmed instead of
 // guessed.
 //
 // Usage: npm run uniflow:discover
@@ -67,9 +67,9 @@ for (const entity of docs.entities) {
   console.log("  filters:", entity.filters.map((f) => `${f.paramName} (${f.type})`));
 }
 
-console.log("\n=== Unified entity contracts (schemas) for 'products' and 'orders' ===");
+console.log("\n=== Unified entity contracts (schemas) for 'item' and 'order' ===");
 const { data: contracts } = await client.entities.list({ systemIds: [systemId] });
-for (const entityType of ["products", "orders"]) {
+for (const entityType of ["item", "order"]) {
   const contract = contracts.find((c) => c.entityType === entityType);
   if (!contract) {
     console.log(`\n[${entityType}] No contract found for this systemId.`);

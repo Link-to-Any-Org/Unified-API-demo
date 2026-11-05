@@ -1,11 +1,15 @@
 import type { NextConfig } from "next";
 
+// Local dev origins (e.g. an HTTPS tunnel) beyond localhost, for HMR/dev
+// asset loading. Unset by default - set DEV_TUNNEL_ORIGIN to your own
+// tunnel hostname (e.g. from `npx ngrok http 3000`) when you need one.
+const devTunnelOrigin = process.env.DEV_TUNNEL_ORIGIN;
+
 const nextConfig: NextConfig = {
-  /* config options here */
-  // Allow HMR/dev assets to load when the app is accessed through the
-  // ngrok tunnel instead of localhost, otherwise client-side hydration
-  // (and all interactivity) silently fails in dev mode.
-  allowedDevOrigins: ["shamika-unspurious-salably.ngrok-free.dev"],
+  agentRules: false,
+  allowedDevOrigins: devTunnelOrigin ? [devTunnelOrigin] : undefined,
+  cacheComponents: true,
+  partialPrefetching: true,
   turbopack: {
     rules: {
       "*.css": {

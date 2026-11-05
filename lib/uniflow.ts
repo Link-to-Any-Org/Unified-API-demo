@@ -1,54 +1,63 @@
 import { randomUUID } from "crypto";
-import { LinkToAny, type Account, type LinkToAnyEnvironment } from "@linktoany/sdk";
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`Missing required env var: ${name}`);
-  }
-  return value;
-}
+import { cacheLife, cacheTag } from "next/cache";
+import { LinkToAny, type Account } from "@linktoany/sdk";
+import { getConfig } from "@/lib/config";
+import { ValidationError } from "@/lib/errors";
+import { roundToCurrencyPrecision, DEFAULT_CURRENCY } from "@/lib/currency";
+import {
+  assertLineItemCount,
+  assertValidQuantity,
+  computeOrderTotal,
+  type RequestedLineItem,
+} from "@/lib/order-math";
 
 let client: LinkToAny | undefined;
 
 export function getUniflowClient(): LinkToAny {
   if (!client) {
-    const environment = (process.env.UNIFLOW_ENVIRONMENT ??
-      "dev") as LinkToAnyEnvironment;
+    const config = getConfig();
     client = new LinkToAny({
-      apiKey: requireEnv("UNIFLOW_API_KEY"),
-      environment,
-      organisationId: process.env.UNIFLOW_ORGANISATION_ID || undefined,
+      apiKey: config.uniflowApiKey,
+      environment: config.uniflowEnvironment,
+      organisationId: config.uniflowOrganisationId,
     });
   }
   return client;
 }
 
-export function getSquareSystemId(): string {
-  return requireEnv("UNIFLOW_SQUARE_SYSTEM_ID");
-}
-
-// Name of the registered OAuth client-credential set to connect through
-// (not a generic slug - the server resolves actual Square client
-// id/secret from this exact name, scoped to the current organisation).
-export function getSquareApplicationSlug(): string {
-  return requireEnv("UNIFLOW_SQUARE_APPLICATION");
-}
-
 export function getReturnUrl(): string {
-  return requireEnv("UNIFLOW_RETURN_URL");
+  return getConfig().uniflowReturnUrl;
 }
 
-// Square is a "hosted-consent" platform on the Unified API: do NOT send our
-// own merchantId (it would override the platform's real merchant id on the
-// account); the callback instead carries Square's own merchant id as
-// `external_id`, looked up afterwards via listByMerchant.
-export async function connectSquareAccount() {
-  return getUniflowClient().auth.connectAccount(
-    getSquareSystemId(),
-    getSquareApplicationSlug(),
-    { successUrl: getReturnUrl(), failureUrl: getReturnUrl() }
+export interface ConnectLinkResult {
+  accountLinkUrl: string;
+}
+
+// Square connects through LinkToAny's own OAuth callback (the redirect URI
+// registered with Square), not the credential set's callback that
+// `auth.connectAccount` would use - the SDK itself recommends
+// `createConnectLink` for Square/Clover/Lightspeed/Shopify for this reason.
+// `state` is appended to successUrl as a path segment, not a query param:
+// LinkToAny's own callback appends its own `?accountId=...&merchantId=...`
+// to whatever successUrl we give it, and doing that without checking for an
+// existing `?` would merge a query-string state into one garbled param
+// instead of leaving it comparable - confirmed live, see
+// docs/square-integration-notes.md.
+export async function createSquareConnectLink(
+  successUrl: string,
+  state: string
+): Promise<ConnectLinkResult> {
+  const config = getConfig();
+  const link = await getUniflowClient().auth.createConnectLink(
+    config.uniflowSquareSystemId,
+    {
+      successUrl: `${successUrl.replace(/\/$/, "")}/${encodeURIComponent(state)}`,
+    }
   );
+  if (link.mode !== "oauth_redirect") {
+    throw new Error(`Expected an oauth_redirect connect link for Square, got mode "${link.mode}"`);
+  }
+  return { accountLinkUrl: link.accountLinkUrl };
 }
 
 function accountSystemId(account: Account): string | undefined {
@@ -60,26 +69,71 @@ function accountSystemId(account: Account): string | undefined {
 export async function findSquareAccountForMerchant(
   merchantId: string
 ): Promise<Account | undefined> {
-  const systemId = getSquareSystemId();
-  const { data } = await getUniflowClient().accounts.listByMerchant(
-    merchantId
+  const config = getConfig();
+  const { data } = await getUniflowClient().accounts.listByMerchant(merchantId);
+  const matches = data.filter(
+    (account) => accountSystemId(account) === config.uniflowSquareSystemId
   );
-  const matches = data.filter((account) => accountSystemId(account) === systemId);
   matches.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
   return matches[0];
+}
+
+export interface VerifiedConnection {
+  account: Account;
+  merchantName?: string;
+  currencyCode: string;
+}
+
+// Confirms the account the callback resolved is genuinely the one this flow
+// started: its platform merchant id matches what the callback reported, it
+// was created after the flow began (not a stale pre-existing account), and
+// LinkToAny itself reports the connection active.
+export async function verifySquareConnection(
+  account: Account,
+  expectedMerchantId: string | undefined,
+  flowStartedAt: Date
+): Promise<VerifiedConnection> {
+  if (expectedMerchantId && account.merchantId !== expectedMerchantId) {
+    throw new ValidationError(
+      `Account merchant id (${account.merchantId}) does not match the callback's merchant id (${expectedMerchantId})`
+    );
+  }
+
+  if (account.createdAt) {
+    const createdAt = new Date(account.createdAt);
+    const skewMs = 2 * 60 * 1000;
+    if (createdAt.getTime() < flowStartedAt.getTime() - skewMs) {
+      throw new ValidationError("Account predates this connection attempt");
+    }
+  }
+
+  const status = await getUniflowClient().auth.getStatus(account._id);
+  if (!status.data.isAuthenticated) {
+    throw new ValidationError(`Account is not active (status: ${status.data.status})`);
+  }
+
+  const info = account.externalAccountInfo as
+    | { accounts?: { locations?: { business_name?: string; currency?: string }[] } }
+    | undefined;
+  const location = info?.accounts?.locations?.[0];
+
+  return {
+    account,
+    merchantName: account.name ?? location?.business_name,
+    currencyCode: location?.currency ?? DEFAULT_CURRENCY,
+  };
 }
 
 export async function disconnectAccount(accountId: string): Promise<void> {
   await getUniflowClient().accounts.delete(accountId);
 }
 
-// Confirmed live against this Square integration's current contracts
-// (platform-side schema was updated under us during development - re-verify
-// with `npm run uniflow:discover` / a direct records.* probe if things
-// start 404ing with UNIFIED_CONTRACT_NOT_FOUND again).
+// Confirmed live against this Square integration's current contracts - see
+// docs/square-integration-notes.md for the full record.
 const ITEM_ENTITY_TYPE = "item";
 const ORDER_ENTITY_TYPE = "order";
 const PAYMENT_ENTITY_TYPE = "payment";
+const CATEGORY_ENTITY_TYPE = "category";
 
 export interface CatalogItemVariation {
   id: string;
@@ -92,10 +146,8 @@ export interface CatalogItem {
   id: string;
   name: string;
   description?: string;
-  // Raw, unresolved category links from Square - an item is commonly linked
-  // into more than one of these at once (see CategoryUsage below). Use
-  // resolveItemCategory() to pick the right one for a given purpose rather
-  // than reading this array positionally.
+  // Raw, unresolved category links - see resolveItemCategory() for why this
+  // isn't safe to index into positionally.
   categoryExternalIds: string[];
   variations: CatalogItemVariation[];
 }
@@ -116,54 +168,44 @@ interface RawItem {
   [key: string]: unknown;
 }
 
-function normalizeCatalogItem(raw: RawItem): CatalogItem {
+// An item or variation with no externalId is bad upstream data, not
+// something to paper over with a generated id - a made-up id can never be
+// referenced again on a later read, so it's silently dropped instead.
+function normalizeCatalogItem(raw: RawItem): CatalogItem | undefined {
+  if (!raw.externalId) return undefined;
+  const variations = (raw.variations ?? []).flatMap((v): CatalogItemVariation[] =>
+    v.externalId
+      ? [{ id: v.externalId, name: v.name, sku: v.sku, price: typeof v.price === "number" ? v.price : undefined }]
+      : []
+  );
   return {
-    id: raw.externalId ?? randomUUID(),
+    id: raw.externalId,
     name: raw.name ?? "Untitled item",
     description: raw.description,
     categoryExternalIds: raw.categoryExternalIds ?? [],
-    variations: (raw.variations ?? []).map((v, index) => ({
-      id: v.externalId ?? `variation-${index}`,
-      name: v.name,
-      sku: v.sku,
-      price: typeof v.price === "number" ? v.price : undefined,
-    })),
+    variations,
   };
 }
 
 export async function listCatalogItems(accountId: string): Promise<CatalogItem[]> {
+  "use cache";
+  cacheLife("minutes");
+  cacheTag(`catalog-items:${accountId}`);
+
   const items: CatalogItem[] = [];
   for await (const raw of getUniflowClient().records.iterate<RawItem>(
     accountId,
     ITEM_ENTITY_TYPE,
     { pageSize: 100 }
   )) {
-    items.push(normalizeCatalogItem(raw));
+    const item = normalizeCatalogItem(raw);
+    if (item) items.push(item);
   }
   return items;
 }
 
-const CATEGORY_ENTITY_TYPE = "category";
-
-// Confirmed live against Square's own model (developer.squareup.com/docs/
-// catalog-api/manage-menus): a merchant's catalog holds two independent
-// category taxonomies, not one. REGULAR categories are created through the
-// Catalog API and drive POS grouping and sales reporting. MENU categories
-// are created by Square's menu builder (Dashboard / Online Ordering) and
-// drive how items are organized on a public-facing menu; they can be nested
-// under a parent/root menu category (`parentExternalId`) that has no
-// REGULAR-category equivalent. KITCHEN exists in this unified schema for
-// other POS integrations' kitchen-routing categories; Square itself has no
-// such category type (kitchen routing there is the item-level `kitchenName`
-// field instead), so it's included for type completeness only.
-//
-// An item commonly belongs to one REGULAR category *and* one MENU category
-// at the same time (confirmed live: "Ice Cream" items here carry both a
-// REGULAR "Ice Cream" and a MENU "Ice Cream" id). That's the real cause of
-// "the same item maps to a different category depending on usage": there
-// isn't one category to read, there are two parallel ones, and which one is
-// "correct" depends on whether you're building a reporting/POS view or a
-// menu/online-ordering view.
+// Square's menu categories (see docs/square-integration-notes.md) can nest
+// under a parent that has no REGULAR-category equivalent.
 export type CategoryUsage = "REGULAR" | "MENU" | "KITCHEN";
 
 export interface CategoryInfo {
@@ -179,9 +221,11 @@ interface RawCategory {
   parentExternalId?: string;
 }
 
-export async function listCategories(
-  accountId: string
-): Promise<Map<string, CategoryInfo>> {
+export async function listCategories(accountId: string): Promise<Map<string, CategoryInfo>> {
+  "use cache";
+  cacheLife("minutes");
+  cacheTag(`catalog-categories:${accountId}`);
+
   const categories = new Map<string, CategoryInfo>();
   for await (const raw of getUniflowClient().records.iterate<RawCategory>(
     accountId,
@@ -199,14 +243,8 @@ export async function listCategories(
   return categories;
 }
 
-// Deterministically picks the category id matching the requested usage,
-// instead of reading `categoryExternalIds[0]` (undefined behavior - Square
-// does not guarantee or document an order for that array, so which usage
-// "wins" there is incidental to API response order, not a real signal).
-// Falls back to whatever id is present if none match the requested usage,
-// so single-category items (or items whose category record has no
-// `categoryType`, e.g. from an older/partial sync) still resolve to
-// something rather than silently disappearing.
+// Picks the category id matching the requested usage instead of reading
+// categoryExternalIds[0] - see docs/square-integration-notes.md.
 export function resolveItemCategory(
   categoryExternalIds: string[],
   categories: Map<string, CategoryInfo>,
@@ -218,11 +256,49 @@ export function resolveItemCategory(
   return preferred ?? categoryExternalIds[0];
 }
 
-export interface CreateOrderLineItem {
-  variationExternalId?: string;
-  name?: string;
+export { MAX_LINE_ITEMS, MAX_QUANTITY_PER_LINE, type RequestedLineItem } from "@/lib/order-math";
+
+export interface ResolvedLineItem {
+  variationExternalId: string;
+  name: string;
   quantity: number;
   unitPrice: number;
+}
+
+// Server-side pricing: the client names a variation and a quantity, nothing
+// else. Name and price always come from the account's own catalog, never
+// from the request body, so a tampered client payload can't change what's
+// charged.
+export async function resolveOrderLineItems(
+  accountId: string,
+  currencyCode: string,
+  requested: RequestedLineItem[]
+): Promise<ResolvedLineItem[]> {
+  assertLineItemCount(requested);
+
+  const items = await listCatalogItems(accountId);
+  const variationIndex = new Map<string, { name: string; price: number }>();
+  for (const item of items) {
+    for (const variation of item.variations) {
+      if (typeof variation.price !== "number") continue;
+      const name = variation.name ? `${item.name} (${variation.name})` : item.name;
+      variationIndex.set(variation.id, { name, price: variation.price });
+    }
+  }
+
+  return requested.map((line) => {
+    assertValidQuantity(line.quantity, line.variationExternalId);
+    const match = variationIndex.get(line.variationExternalId);
+    if (!match) {
+      throw new ValidationError(`Unknown or unpriced variation: ${line.variationExternalId}`);
+    }
+    return {
+      variationExternalId: line.variationExternalId,
+      name: match.name,
+      quantity: line.quantity,
+      unitPrice: roundToCurrencyPrecision(match.price, currencyCode),
+    };
+  });
 }
 
 export interface CreatedOrder {
@@ -237,21 +313,22 @@ interface RawSquareOrderWriteResult {
   };
 }
 
-// Confirmed live required shape for the 'order' write contract: externalId,
-// a status, each line item needs its own externalId, and a totals.total we
-// compute ourselves (Square may still add its own tax on top).
-
+// `externalId` is the client-supplied idempotency key, reused as-is so a
+// retried request (e.g. after a dropped response) doesn't create a second
+// order for the same checkout attempt.
 export async function createOrder(
   accountId: string,
-  lineItems: CreateOrderLineItem[],
-  currencyCode = "USD"
+  externalId: string,
+  lineItems: ResolvedLineItem[],
+  currencyCode: string
 ): Promise<CreatedOrder> {
-  const total = lineItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  const total = computeOrderTotal(lineItems, currencyCode);
 
   const result = await getUniflowClient().records.create(accountId, ORDER_ENTITY_TYPE, {
-    externalId: randomUUID(),
+    externalId,
     currencyCode,
     status: "OPEN",
+    note: "Demo POS order - simulated tender, see README",
     lineItems: lineItems.map((item) => ({
       externalId: randomUUID(),
       variationExternalId: item.variationExternalId,
@@ -271,8 +348,9 @@ export async function createOrder(
   return { id: orderId, total, currencyCode };
 }
 
-// Confirmed live required shape for the 'payment' write contract.
-
+// Always a simulated cash tender - see docs/square-integration-notes.md for
+// why every payment this integration writes is an immediate, irreversible
+// real capture against the connected Square account.
 export async function createOrderPayment(
   accountId: string,
   orderExternalId: string,
@@ -283,6 +361,7 @@ export async function createOrderPayment(
     externalId: randomUUID(),
     orderExternalId,
     status: "CAPTURED",
+    tenderCategory: "CASH",
     amount,
     currency,
   });
@@ -314,15 +393,20 @@ export async function listRecentOrders(accountId: string): Promise<OrderSummary[
   const page = await getUniflowClient().records.list<RawOrder>(accountId, ORDER_ENTITY_TYPE, {
     pageSize: 20,
   });
-  return page.data.map((order) => ({
-    id: order.externalId ?? "",
-    status: order.status,
-    createdAt: order.createdAt,
-    total: order.totals?.total,
-    currencyCode: order.totals?.currency,
-    lineItems: (order.lineItems ?? []).map((item) => ({
-      name: item.name,
-      quantity: item.quantity,
-    })),
-  }));
+  return page.data
+    .filter((order): order is RawOrder & { externalId: string } => Boolean(order.externalId))
+    .map(
+      (order): OrderSummary => ({
+        id: order.externalId,
+        status: order.status,
+        createdAt: order.createdAt,
+        total: order.totals?.total,
+        currencyCode: order.totals?.currency,
+        lineItems: (order.lineItems ?? []).map((item) => ({
+          name: item.name,
+          quantity: item.quantity,
+        })),
+      })
+    )
+    .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
