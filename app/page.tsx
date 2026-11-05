@@ -28,8 +28,10 @@ export default async function Home({
 }) {
   const session = await getSession();
   const { error } = await searchParams;
-  const message = errorMessageFor(error);
   const connected = Boolean(session.linkToAnyAccountId);
+  // Once connected there's no Connect button to have failed, so an `?error=`
+  // here is a stale URL (back/forward history) - don't show it.
+  const message = connected ? undefined : errorMessageFor(error);
 
   const appOrigin = new URL(getReturnUrl()).origin;
   const requestHeaders = await headers();

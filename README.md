@@ -111,8 +111,10 @@ Square**, and you'll land on `/items` once the connection is verified.
   account's own catalog on the server (the client only ever sends a
   variation id and a quantity) and creates an `order` record. Only if
   `ENABLE_PAYMENT_WRITES=true` does it then write an immediate `payment`
-  record against it, tagged as a simulated cash tender. Prices are formatted
-  in the connected Square location's locale and currency. See
+  record against it, tagged as a simulated cash tender. The merchant name and
+  currency come from the account's unified `location` record (read once at
+  connect time); the unified location has no language field, so prices are
+  formatted in `en-US`. See
   [`docs/square-integration-notes.md`](docs/square-integration-notes.md) for
   what's actually confirmed to work in that write path (idempotency keys,
   totals, why payment status is ignored, why there's no refund path).

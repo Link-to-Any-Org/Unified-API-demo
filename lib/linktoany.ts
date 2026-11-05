@@ -144,21 +144,38 @@ export async function verifySquareConnection(
     flowStartedAt
   );
 
-  const info = account.externalAccountInfo as
-    | {
-        accounts?: {
-          locations?: { business_name?: string; currency?: string; language_code?: string }[];
-        };
-      }
-    | undefined;
-  const location = info?.accounts?.locations?.[0];
+  // `externalAccountInfo` only holds the OAuth token response for Square, so
+  // display name and currency come from the unified `location` entity.
+  const location = await getPrimaryLocation(account._id);
 
   return {
     account,
-    merchantName: account.name ?? location?.business_name,
+    merchantName: location?.name ?? account.name,
     currencyCode: location?.currency ?? DEFAULT_CURRENCY,
-    locale: resolveLocale(location?.language_code),
+    // The unified location contract has no language field, so this is the
+    // default locale unless a future mapping adds one.
+    locale: resolveLocale(location?.languageCode),
   };
+}
+
+interface RawLocation {
+  name?: string;
+  currency?: string;
+  languageCode?: string;
+  status?: string;
+}
+
+// Best effort: a failed lookup falls back to defaults rather than failing an
+// otherwise verified connection.
+async function getPrimaryLocation(accountId: string): Promise<RawLocation | undefined> {
+  try {
+    const { data } = await getLinkToAnyClient().records.list<RawLocation>(accountId, "location", {
+      pageSize: 10,
+    });
+    return data.find((location) => location.status === "ACTIVE") ?? data[0];
+  } catch {
+    return undefined;
+  }
 }
 
 export async function disconnectAccount(accountId: string): Promise<void> {
