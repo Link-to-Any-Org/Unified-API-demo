@@ -17,10 +17,6 @@ implementation.
 > real and this integration has no refund capability. **Only enable it
 > against a disposable Square sandbox or test account.** The app can't tell
 > a sandbox merchant from a production one, so this flag is the only gate.
->
-> **The OAuth connect flow has not yet completed end to end** with the
-> current callback code - see
-> [`docs/square-integration-notes.md`](docs/square-integration-notes.md#oauth-callback-status).
 
 ## Request flow
 

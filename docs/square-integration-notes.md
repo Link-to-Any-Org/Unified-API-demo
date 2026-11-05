@@ -50,13 +50,25 @@ capture.
 
 ## OAuth callback: status
 
-**Not yet confirmed end to end.** As of Nov 2026 no live connect has
-completed with the current callback code. Observed failures so far were
-(a) `invalid_state` when the session cookie didn't survive the round trip
-(seen in a private browsing window), and (b) `CONNECTION_FAILED` reported by
-LinkToAny itself after Square consent, before our callback logic runs. Until
-a connect completes, treat the callback verification below as designed but
-unproven.
+**Confirmed end to end (Nov 5 2026, production Square merchant):** state
+check, account lookup by `external_id`, freshness and `auth.getStatus`
+verification all passed and the merchant landed on `/items`.
+
+Failures hit along the way, for anyone debugging a repeat:
+
+- `CONNECTION_FAILED` from LinkToAny after Square consent, before our
+  callback logic runs. Cause: with no credential set specified, connect links
+  used whichever Square credential set LinkToAny resolved for the API key (a
+  newer set whose stored secret didn't complete the token exchange), not the
+  one that had worked before. Fixed by passing `LINKTOANY_SQUARE_APPLICATION`'s
+  set as `clientCredentialId`. All the organisation's sets share one Square
+  app id, so the consent screen looks identical either way.
+- `stale_link` / `no_state_in_session`: sign-in finished in an older Square
+  tab whose link had already been used, or Connect was clicked on a different
+  host than `LINKTOANY_RETURN_URL` (the home page now only offers Connect on
+  that host).
+- `invalid_state` in a private browsing window, where the session cookie
+  didn't survive the round trip.
 
 ### State nonce as a path segment
 
@@ -74,5 +86,7 @@ to avoid trusting a stale connection. A merchant reconnecting may have their
 existing LinkToAny account re-authorized instead of a new one created, so the
 check uses the latest of `auth.getStatus().lastAuthAt`, `updatedAt` and
 `createdAt` rather than `createdAt` alone (which would reject every
-reconnect). Which of these fields LinkToAny actually updates on a Square
-reconnect still needs confirming live.
+reconnect). Observed live: connecting again after a disconnect creates a new
+account (`createdAt`, `updatedAt` and `lastAuthAt` all set during the flow).
+Re-authorizing an account that was never disconnected hasn't been observed
+yet; `lastAuthAt` is the field expected to move in that case.
