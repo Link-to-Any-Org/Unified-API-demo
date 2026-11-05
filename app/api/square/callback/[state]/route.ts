@@ -50,7 +50,13 @@ export async function GET(
     // Reason code only - never the nonce, the connect URL or the callback's
     // query string.
     logger.warn("square.callback.invalid_state", { requestId, reason: stateProblem });
-    return errorRedirect(appOrigin, "invalid_state");
+    // No nonce in the session means this callback belongs to a link that was
+    // already used (e.g. sign-in finished in an older tab) or was started on
+    // another host - worth a more specific message than a plain mismatch.
+    return errorRedirect(
+      appOrigin,
+      stateProblem === "no_state_in_session" ? "stale_link" : "invalid_state"
+    );
   }
   const flowStartedAt = new Date(stateCreatedAt!);
 

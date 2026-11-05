@@ -1,9 +1,13 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { getSession } from "@/lib/session";
+import { getReturnUrl } from "@/lib/linktoany";
 
 const ERROR_MESSAGES: Record<string, string> = {
   connect_failed: "Could not connect to Square. Please try again.",
   invalid_state: "The connection attempt expired or was invalid. Please try again.",
+  stale_link:
+    "That Square sign-in link was already used or was started somewhere else. Close any other Square sign-in tabs, click Connect to Square, and finish signing in in the tab that opens.",
   not_verified: "We couldn't verify the Square connection. Please try again.",
 };
 
@@ -26,6 +30,11 @@ export default async function Home({
   const { error } = await searchParams;
   const message = errorMessageFor(error);
   const connected = Boolean(session.linkToAnyAccountId);
+
+  const appOrigin = new URL(getReturnUrl()).origin;
+  const requestHeaders = await headers();
+  const requestHost = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
+  const onAppOrigin = !requestHost || requestHost === new URL(appOrigin).host;
 
   return (
     <div className="flex flex-1 items-center justify-center bg-zinc-50 dark:bg-black">
@@ -66,7 +75,7 @@ export default async function Home({
               </button>
             </form>
           </div>
-        ) : (
+        ) : onAppOrigin ? (
           <form action="/api/square/authorize" method="POST" className="w-full">
             <button
               type="submit"
@@ -75,6 +84,21 @@ export default async function Home({
               Connect to Square
             </button>
           </form>
+        ) : (
+          // The OAuth state cookie is per-host and the callback always returns
+          // to LINKTOANY_RETURN_URL's host, so connecting from any other host
+          // (e.g. localhost behind a tunnel) can never pass the state check.
+          <div className="flex w-full flex-col gap-3">
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Connecting only works from the app&apos;s registered address.
+            </p>
+            <a
+              href={appOrigin}
+              className="flex h-11 w-full items-center justify-center rounded-full bg-foreground px-5 font-medium text-background transition-colors hover:bg-foreground-hover"
+            >
+              Open {new URL(appOrigin).host}
+            </a>
+          </div>
         )}
       </main>
     </div>

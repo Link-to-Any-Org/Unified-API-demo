@@ -121,6 +121,7 @@ Square**, and you'll land on `/items` once the connection is verified.
 | Symptom | Cause |
 | --- | --- |
 | Redirected to `/?error=invalid_state` | The OAuth state nonce was missing, didn't match, or the attempt took longer than 15 minutes. Try connecting again. |
+| Redirected to `/?error=stale_link` | The callback arrived with no state nonce in the session: sign-in was finished in an older Square tab (whose link was already used), or Connect was clicked on a different host than `LINKTOANY_RETURN_URL` (e.g. `localhost` instead of the tunnel). Close other Square sign-in tabs and connect again from the registered host. |
 | Redirected to `/?error=connect_failed` | LinkToAny reported an OAuth failure, or `createConnectLink` didn't return an `oauth_redirect` link - check `LINKTOANY_SQUARE_SYSTEM_ID` and your Square credential set. |
 | Redirected to `/?error=not_verified` | The account was found but failed verification (merchant id mismatch, not re-authorized during this flow, or isn't active) - check the server logs for `square.callback.failed`. |
 | Placing an order returns `400` | The cart failed server-side validation (unknown/unpriced variation, bad quantity, too many line items) - the error message names which. |
