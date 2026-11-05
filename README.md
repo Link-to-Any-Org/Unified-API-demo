@@ -61,6 +61,11 @@ Fill in `.env.local`:
   ```
   to find Square's `systemId` on your organisation (and inspect the live
   `item`/`order`/`payment` contracts), then paste it in.
+- `LINKTOANY_SQUARE_APPLICATION` - optional; the name of the Square
+  credential set to connect through. Set it if your organisation has more
+  than one, otherwise LinkToAny picks one for your API key (which may not be
+  the one you configured). A name that doesn't exist fails the connect with
+  the list of available sets in the server log.
 - `LINKTOANY_RETURN_URL` - where LinkToAny sends the merchant back after OAuth;
   must match what's registered for your Square credential set
   (`<your-origin>/api/square/callback`).
@@ -122,7 +127,7 @@ Square**, and you'll land on `/items` once the connection is verified.
 | --- | --- |
 | Redirected to `/?error=invalid_state` | The OAuth state nonce was missing, didn't match, or the attempt took longer than 15 minutes. Try connecting again. |
 | Redirected to `/?error=stale_link` | The callback arrived with no state nonce in the session: sign-in was finished in an older Square tab (whose link was already used), or Connect was clicked on a different host than `LINKTOANY_RETURN_URL` (e.g. `localhost` instead of the tunnel). Close other Square sign-in tabs and connect again from the registered host. |
-| Redirected to `/?error=connect_failed` | LinkToAny reported an OAuth failure, or `createConnectLink` didn't return an `oauth_redirect` link - check `LINKTOANY_SQUARE_SYSTEM_ID` and your Square credential set. |
+| Redirected to `/?error=connect_failed` | LinkToAny reported an OAuth failure (server log `square.callback.provider_error`, e.g. `CONNECTION_FAILED` after Square consent), or `createConnectLink` didn't return an `oauth_redirect` link - check `LINKTOANY_SQUARE_SYSTEM_ID`, which credential set is used (`LINKTOANY_SQUARE_APPLICATION`), and that set's Square client secret in the LinkToAny dashboard. |
 | Redirected to `/?error=not_verified` | The account was found but failed verification (merchant id mismatch, not re-authorized during this flow, or isn't active) - check the server logs for `square.callback.failed`. |
 | Placing an order returns `400` | The cart failed server-side validation (unknown/unpriced variation, bad quantity, too many line items) - the error message names which. |
 | Placing an order returns `207` | The order was created but the payment write failed; the order id in the response is real and visible in `/orders`. The POS screen offers **Retry payment**, which re-sends only the payment with the same amount and payment id. |

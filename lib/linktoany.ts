@@ -34,6 +34,35 @@ export interface ConnectLinkResult {
   accountLinkUrl: string;
 }
 
+let squareCredentialId: Promise<string | undefined> | undefined;
+
+// Maps LINKTOANY_SQUARE_APPLICATION (a credential-set name) to its id, once
+// per process. Unset means "let LinkToAny choose". A name that doesn't exist
+// is a configuration error, not something to silently fall back from - the
+// fallback set may be a different (possibly broken) Square app.
+function resolveSquareCredentialId(): Promise<string | undefined> {
+  const { linkToAnySquareApplication: application, linkToAnySquareSystemId: systemId } = getConfig();
+  if (!application) return Promise.resolve(undefined);
+  squareCredentialId ??= getLinkToAnyClient()
+    .credentials.list({ systemId })
+    .then(({ data }) => {
+      const match = data.find((set) => set.application === application);
+      if (!match) {
+        const available = data.map((set) => set.application).join(", ") || "none";
+        throw new Error(
+          `LINKTOANY_SQUARE_APPLICATION "${application}" is not a Square credential set on this organisation (available: ${available})`
+        );
+      }
+      return match._id;
+    })
+    .catch((err) => {
+      // Don't cache a failure (e.g. a transient network error).
+      squareCredentialId = undefined;
+      throw err;
+    });
+  return squareCredentialId;
+}
+
 // Square connects through LinkToAny's own OAuth callback (the redirect URI
 // registered with Square), not the credential set's callback that
 // `auth.connectAccount` would use - the SDK itself recommends
@@ -47,10 +76,12 @@ export async function createSquareConnectLink(
   state: string
 ): Promise<ConnectLinkResult> {
   const config = getConfig();
+  const clientCredentialId = await resolveSquareCredentialId();
   const link = await getLinkToAnyClient().auth.createConnectLink(
     config.linkToAnySquareSystemId,
     {
       successUrl: `${successUrl.replace(/\/$/, "")}/${encodeURIComponent(state)}`,
+      ...(clientCredentialId ? { clientCredentialId } : {}),
     }
   );
   if (link.mode !== "oauth_redirect") {

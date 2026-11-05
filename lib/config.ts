@@ -5,6 +5,10 @@ export interface AppConfig {
   linkToAnyOrganisationId?: string;
   linkToAnyEnvironment: LinkToAnyEnvironment;
   linkToAnySquareSystemId: string;
+  // Name of the Square credential set (LinkToAny "application") to connect
+  // through. Without it LinkToAny picks one for the API key itself, which
+  // with several sets on the organisation may not be the one you configured.
+  linkToAnySquareApplication?: string;
   linkToAnyReturnUrl: string;
   sessionSecret: string;
   devTunnelOrigin?: string;
@@ -72,6 +76,7 @@ export function loadConfig(): AppConfig {
     linkToAnyOrganisationId: readEnv("LINKTOANY_ORGANISATION_ID"),
     linkToAnyEnvironment: rawEnvironment as LinkToAnyEnvironment,
     linkToAnySquareSystemId,
+    linkToAnySquareApplication: readEnv("LINKTOANY_SQUARE_APPLICATION"),
     linkToAnyReturnUrl,
     sessionSecret,
     devTunnelOrigin: readEnv("DEV_TUNNEL_ORIGIN"),
