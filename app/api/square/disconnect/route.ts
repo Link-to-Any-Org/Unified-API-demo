@@ -1,14 +1,14 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { disconnectAccount, getReturnUrl } from "@/lib/uniflow";
+import { disconnectAccount, getReturnUrl } from "@/lib/linktoany";
 import { logger } from "@/lib/logger";
 
 export async function POST() {
   const requestId = randomUUID();
   const appOrigin = new URL(getReturnUrl()).origin;
   const session = await getSession();
-  const accountId = session.uniflowAccountId;
+  const accountId = session.linkToAnyAccountId;
 
   if (accountId) {
     try {

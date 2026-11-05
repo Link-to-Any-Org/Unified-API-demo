@@ -1,12 +1,14 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import type { CatalogItem, CatalogItemVariation } from "@/lib/uniflow";
+import type { CatalogItem, CatalogItemVariation } from "@/lib/linktoany";
 import { formatPrice } from "@/lib/currency";
 
 interface PosViewProps {
   items: Array<CatalogItem & { category?: string }>;
   currencyCode: string;
+  locale: string;
+  paymentWritesEnabled: boolean;
 }
 
 interface CartLine {
@@ -20,8 +22,8 @@ interface CartLine {
 }
 
 type OrderResult =
-  | { type: "success"; orderId: string; total: string }
-  | { type: "partial"; orderId: string; total: string; message: string }
+  | { type: "success"; orderId: string; total: string; paymentRecorded: boolean }
+  | { type: "partial"; orderId: string; total: string; message: string; retryable: boolean }
   | { type: "error"; message: string };
 
 const ACCENT_COLORS = [
@@ -54,7 +56,7 @@ async function parseJsonResponse(response: Response): Promise<Record<string, unk
   return response.json();
 }
 
-export default function PosView({ items, currencyCode }: PosViewProps) {
+export default function PosView({ items, currencyCode, locale, paymentWritesEnabled }: PosViewProps) {
   const categories = useMemo(() => {
     const seen = new Set<string>();
     for (const item of items) {
@@ -149,14 +151,17 @@ export default function PosView({ items, currencyCode }: PosViewProps) {
       const data = await parseJsonResponse(response);
 
       if (response.status === 207) {
+        // The order exists; only its payment failed. Keep the idempotency key
+        // (a resubmit would map to the same order) and offer a payment-only
+        // retry instead of leaving the merchant with an unpaid open order.
         setResult({
           type: "partial",
           orderId: String(data.orderId ?? "order"),
-          total: formatPrice(Number(data.total ?? total), String(data.currencyCode ?? currencyCode)),
+          total: formatPrice(Number(data.total ?? total), String(data.currencyCode ?? currencyCode), locale),
           message: String(data.error ?? "Payment was not recorded"),
+          retryable: data.retryable === true,
         });
         setCart({});
-        idempotencyKeyRef.current = null;
         return;
       }
 
@@ -167,7 +172,8 @@ export default function PosView({ items, currencyCode }: PosViewProps) {
       setResult({
         type: "success",
         orderId: String(data.orderId ?? "order"),
-        total: formatPrice(Number(data.total ?? total), String(data.currencyCode ?? currencyCode)),
+        total: formatPrice(Number(data.total ?? total), String(data.currencyCode ?? currencyCode), locale),
+        paymentRecorded: data.paymentRecorded === true,
       });
       setCart({});
       idempotencyKeyRef.current = null;
@@ -175,6 +181,41 @@ export default function PosView({ items, currencyCode }: PosViewProps) {
       setResult({
         type: "error",
         message: err instanceof Error ? err.message : "Failed to create order",
+      });
+    } finally {
+      setPlacing(false);
+    }
+  }
+
+  async function retryPayment() {
+    if (result?.type !== "partial") return;
+    const pending = result;
+    setPlacing(true);
+    try {
+      const response = await fetch(
+        `/api/square/orders/${encodeURIComponent(pending.orderId)}/payment`,
+        { method: "POST" }
+      );
+      const data = await parseJsonResponse(response);
+      if (!response.ok) {
+        setResult({
+          ...pending,
+          message: typeof data.error === "string" ? data.error : "Retrying the payment failed",
+          retryable: data.retryable === true,
+        });
+        return;
+      }
+      setResult({
+        type: "success",
+        orderId: pending.orderId,
+        total: pending.total,
+        paymentRecorded: true,
+      });
+      idempotencyKeyRef.current = null;
+    } catch (err) {
+      setResult({
+        ...pending,
+        message: err instanceof Error ? err.message : "Retrying the payment failed",
       });
     } finally {
       setPlacing(false);
@@ -250,7 +291,7 @@ export default function PosView({ items, currencyCode }: PosViewProps) {
                           <span>{variation.name ?? "Regular"}</span>
                           {hasPrice && (
                             <span className="font-semibold">
-                              {formatPrice(variation.price!, currencyCode)}
+                              {formatPrice(variation.price!, currencyCode, locale)}
                             </span>
                           )}
                         </button>
@@ -302,7 +343,11 @@ export default function PosView({ items, currencyCode }: PosViewProps) {
                 </div>
                 <div>
                   <p className="text-lg font-semibold text-black dark:text-zinc-50">
-                    {result.type === "success" ? "Order recorded (simulated payment)" : "Order recorded - payment not confirmed"}
+                    {result.type === "partial"
+                      ? "Order recorded - payment not confirmed"
+                      : result.paymentRecorded
+                        ? "Order recorded (simulated payment)"
+                        : "Order recorded (no payment written)"}
                   </p>
                   <p className="text-sm text-zinc-600 dark:text-zinc-400">{result.total}</p>
                   {result.type === "partial" && (
@@ -331,8 +376,8 @@ export default function PosView({ items, currencyCode }: PosViewProps) {
                       {line.variationName ? ` (${line.variationName})` : ""}
                     </p>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      {formatPrice(line.unitPrice, currencyCode)} × {line.quantity} ={" "}
-                      {formatPrice(line.unitPrice * line.quantity, currencyCode)}
+                      {formatPrice(line.unitPrice, currencyCode, locale)} × {line.quantity} ={" "}
+                      {formatPrice(line.unitPrice * line.quantity, currencyCode, locale)}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
@@ -364,18 +409,35 @@ export default function PosView({ items, currencyCode }: PosViewProps) {
 
         <div className="flex flex-col gap-3 border-t border-black/10 px-4 py-4 dark:border-white/10">
           {(result?.type === "success" || result?.type === "partial") && lines.length === 0 ? (
-            <button
-              type="button"
-              onClick={clearCart}
-              className="flex h-12 w-full items-center justify-center rounded-full bg-foreground text-base font-semibold text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc]"
-            >
-              Start new order
-            </button>
+            <>
+              {result.type === "partial" && result.retryable && (
+                <button
+                  type="button"
+                  onClick={retryPayment}
+                  disabled={placing}
+                  className="flex h-12 w-full items-center justify-center rounded-full bg-foreground text-base font-semibold text-background transition-colors hover:bg-foreground-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {placing ? "Retrying…" : `Retry payment (${result.total})`}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={clearCart}
+                disabled={placing}
+                className={
+                  result.type === "partial" && result.retryable
+                    ? "flex h-9 w-full items-center justify-center rounded-full border border-black/10 text-sm font-medium text-black transition-colors hover:bg-black/[.04] disabled:opacity-50 dark:border-white/15 dark:text-zinc-50 dark:hover:bg-white/[.06]"
+                    : "flex h-12 w-full items-center justify-center rounded-full bg-foreground text-base font-semibold text-background transition-colors hover:bg-foreground-hover"
+                }
+              >
+                Start new order
+              </button>
+            </>
           ) : (
             <>
               <div className="flex items-center justify-between text-base font-semibold text-black dark:text-zinc-50">
                 <span>Total</span>
-                <span>{formatPrice(total, currencyCode)}</span>
+                <span>{formatPrice(total, currencyCode, locale)}</span>
               </div>
 
               {result?.type === "error" && (
@@ -388,9 +450,11 @@ export default function PosView({ items, currencyCode }: PosViewProps) {
                 type="button"
                 onClick={placeOrder}
                 disabled={lines.length === 0 || placing}
-                className="flex h-12 w-full items-center justify-center rounded-full bg-foreground text-base font-semibold text-background transition-colors hover:bg-[#383838] disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-[#ccc]"
+                className="flex h-12 w-full items-center justify-center rounded-full bg-foreground text-base font-semibold text-background transition-colors hover:bg-foreground-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {placing ? "Processing…" : `Charge ${formatPrice(total, currencyCode)}`}
+                {placing
+                  ? "Processing…"
+                  : `${paymentWritesEnabled ? "Charge" : "Place order"} ${formatPrice(total, currencyCode, locale)}`}
               </button>
               {lines.length > 0 && (
                 <button

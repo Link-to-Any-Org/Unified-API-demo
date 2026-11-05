@@ -25,7 +25,7 @@ export default async function Home({
   const session = await getSession();
   const { error } = await searchParams;
   const message = errorMessageFor(error);
-  const connected = Boolean(session.uniflowAccountId);
+  const connected = Boolean(session.linkToAnyAccountId);
 
   return (
     <div className="flex flex-1 items-center justify-center bg-zinc-50 dark:bg-black">
@@ -53,7 +53,7 @@ export default async function Home({
             </p>
             <Link
               href="/items"
-              className="flex h-11 w-full items-center justify-center rounded-full bg-foreground px-5 font-medium text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc]"
+              className="flex h-11 w-full items-center justify-center rounded-full bg-foreground px-5 font-medium text-background transition-colors hover:bg-foreground-hover"
             >
               View catalog items
             </Link>
@@ -70,7 +70,7 @@ export default async function Home({
           <form action="/api/square/authorize" method="POST" className="w-full">
             <button
               type="submit"
-              className="flex h-11 w-full items-center justify-center rounded-full bg-foreground px-5 font-medium text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc]"
+              className="flex h-11 w-full items-center justify-center rounded-full bg-foreground px-5 font-medium text-background transition-colors hover:bg-foreground-hover"
             >
               Connect to Square
             </button>

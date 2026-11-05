@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
-import { createSquareConnectLink, getReturnUrl } from "@/lib/uniflow";
+import { createSquareConnectLink, getReturnUrl } from "@/lib/linktoany";
 import { getSession } from "@/lib/session";
 import { logger } from "@/lib/logger";
 
@@ -19,9 +19,6 @@ export async function POST() {
     await session.save();
 
     const { accountLinkUrl } = await createSquareConnectLink(getReturnUrl(), state);
-    // Temporary diagnostics while chasing a reproducing invalid_state bug on
-    // the callback - remove once resolved.
-    logger.info("square.authorize.started", { requestId, state, accountLinkUrl });
     // 303, not the default 307: this request is a POST, and a 307 would
     // make the browser re-POST to accountLinkUrl instead of visiting it
     // with GET, which LinkToAny's hosted connect page doesn't expect.

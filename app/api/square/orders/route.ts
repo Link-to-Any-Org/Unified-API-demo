@@ -6,12 +6,14 @@ import {
   resolveOrderLineItems,
   MAX_LINE_ITEMS,
   type RequestedLineItem,
-} from "@/lib/uniflow";
+} from "@/lib/linktoany";
 import { getSession } from "@/lib/session";
+import { getConfig } from "@/lib/config";
 import { ValidationError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { DEFAULT_CURRENCY } from "@/lib/currency";
+import { BodyTooLargeError, readBodyWithLimit } from "@/lib/read-body";
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -33,7 +35,7 @@ function isRequestedLineItem(item: unknown): item is RequestedLineItem {
 export async function POST(request: NextRequest) {
   const requestId = randomUUID();
   const session = await getSession();
-  const accountId = session.uniflowAccountId;
+  const accountId = session.linkToAnyAccountId;
 
   if (!accountId) {
     return NextResponse.json({ error: "Not connected to Square" }, { status: 401 });
@@ -43,6 +45,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Too many requests" }, { status: 429 });
   }
 
+  // Fast reject on an honest Content-Length; the real cap is enforced while
+  // reading, since chunked requests don't send the header at all.
   const contentLength = Number(request.headers.get("content-length") ?? "0");
   if (contentLength > MAX_BODY_BYTES) {
     return NextResponse.json({ error: "Request body too large" }, { status: 413 });
@@ -50,8 +54,11 @@ export async function POST(request: NextRequest) {
 
   let body: CreateOrderRequestBody;
   try {
-    body = await request.json();
-  } catch {
+    body = JSON.parse(await readBodyWithLimit(request.body, MAX_BODY_BYTES));
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) {
+      return NextResponse.json({ error: "Request body too large" }, { status: 413 });
+    }
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
@@ -81,31 +88,43 @@ export async function POST(request: NextRequest) {
   try {
     const lineItems = await resolveOrderLineItems(accountId, currencyCode, body.lineItems);
     const order = await createOrder(accountId, body.idempotencyKey, lineItems, currencyCode);
+    const orderResult = { orderId: order.id, total: order.total, currencyCode: order.currencyCode };
 
+    // Hard gate: with payment writes disabled the order is all that's
+    // written - no payment record is ever sent to Square.
+    if (!getConfig().paymentWritesEnabled || order.total <= 0) {
+      return NextResponse.json({ ...orderResult, paymentRecorded: false }, { status: 201 });
+    }
+
+    const paymentExternalId = randomUUID();
     try {
-      if (order.total > 0) {
-        await createOrderPayment(accountId, order.id, order.total, order.currencyCode);
-      }
+      await createOrderPayment(accountId, order.id, paymentExternalId, order.total, order.currencyCode);
     } catch (err) {
       logger.error("square.orders.payment_failed", { requestId, accountId, orderId: order.id, err });
+      // Keep what's needed to retry just the payment in the sealed session, so
+      // the retry can't change the amount and reuses the same payment id.
+      session.pendingPayment = {
+        orderId: order.id,
+        paymentExternalId,
+        amount: order.total,
+        currencyCode: order.currencyCode,
+      };
+      await session.save();
       // Order exists but the payment write failed - a distinct status so the
       // client can tell "nothing happened" apart from "order placed, payment
-      // did not go through".
+      // did not go through", and offer a payment retry.
       return NextResponse.json(
         {
-          orderId: order.id,
-          total: order.total,
-          currencyCode: order.currencyCode,
+          ...orderResult,
+          paymentRecorded: false,
+          retryable: true,
           error: "Order was created but recording the payment failed",
         },
         { status: 207 }
       );
     }
 
-    return NextResponse.json(
-      { orderId: order.id, total: order.total, currencyCode: order.currencyCode },
-      { status: 201 }
-    );
+    return NextResponse.json({ ...orderResult, paymentRecorded: true }, { status: 201 });
   } catch (err) {
     if (err instanceof ValidationError) {
       return NextResponse.json({ error: err.message }, { status: 400 });

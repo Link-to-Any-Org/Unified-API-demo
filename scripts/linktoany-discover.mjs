@@ -3,7 +3,7 @@
 // 'order' entities, so the app's field mapping can be confirmed instead of
 // guessed.
 //
-// Usage: npm run uniflow:discover
+// Usage: npm run linktoany:discover
 
 import { LinkToAny } from "@linktoany/sdk";
 
@@ -17,9 +17,9 @@ function requireEnv(name) {
 }
 
 const client = new LinkToAny({
-  apiKey: requireEnv("UNIFLOW_API_KEY"),
-  environment: process.env.UNIFLOW_ENVIRONMENT ?? "dev",
-  organisationId: process.env.UNIFLOW_ORGANISATION_ID || undefined,
+  apiKey: requireEnv("LINKTOANY_API_KEY"),
+  environment: process.env.LINKTOANY_ENVIRONMENT ?? "dev",
+  organisationId: process.env.LINKTOANY_ORGANISATION_ID || undefined,
 });
 
 console.log(`Base URL: ${client.baseUrl}`);
@@ -48,9 +48,9 @@ if (matches.length === 0) {
   }
 }
 
-const systemId = process.env.UNIFLOW_SQUARE_SYSTEM_ID || matches[0]?._id;
+const systemId = process.env.LINKTOANY_SQUARE_SYSTEM_ID || matches[0]?._id;
 if (!systemId) {
-  console.log("\nSet UNIFLOW_SQUARE_SYSTEM_ID (from the list above) and re-run to see entity docs.");
+  console.log("\nSet LINKTOANY_SQUARE_SYSTEM_ID (from the list above) and re-run to see entity docs.");
   process.exit(0);
 }
 

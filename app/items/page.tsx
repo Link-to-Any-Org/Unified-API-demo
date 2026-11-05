@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
-import { listCategories, listCatalogItems, resolveItemCategory, type CatalogItem } from "@/lib/uniflow";
-import { DEFAULT_CURRENCY } from "@/lib/currency";
+import { listCategories, listCatalogItems, resolveItemCategory, type CatalogItem } from "@/lib/linktoany";
+import { DEFAULT_CURRENCY, DEFAULT_LOCALE } from "@/lib/currency";
 import { getConfig } from "@/lib/config";
 import PosView from "./pos-view";
 
@@ -14,13 +14,14 @@ export const instant = false;
 
 export default async function ItemsPage() {
   const session = await getSession();
-  if (!session.uniflowAccountId) {
+  if (!session.linkToAnyAccountId) {
     redirect("/");
   }
 
+  const { paymentWritesEnabled } = getConfig();
   const [rawItems, categories] = await Promise.all([
-    listCatalogItems(session.uniflowAccountId),
-    listCategories(session.uniflowAccountId),
+    listCatalogItems(session.linkToAnyAccountId),
+    listCategories(session.linkToAnyAccountId),
   ]);
 
   const items: Array<CatalogItem & { category?: string }> = rawItems.map((item) => {
@@ -68,14 +69,20 @@ export default async function ItemsPage() {
           role="status"
           className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
         >
-          Demo payments only: placing an order here writes a real, immediately
-          captured payment record against the connected Square account. No
-          card is ever charged.
-          {!getConfig().isSandbox && (
-            <strong className="block">
-              This LinkToAny connection is on the production environment -
-              only use a disposable Square account.
-            </strong>
+          {paymentWritesEnabled ? (
+            <>
+              Payment writes are <strong>on</strong>: placing an order writes a
+              real, immediately captured (simulated cash) payment against the
+              connected Square account. No card is charged, but the capture
+              can&apos;t be refunded from this app - only use a disposable
+              Square account.
+            </>
+          ) : (
+            <>
+              Payment writes are <strong>off</strong>: placing an order creates
+              the Square order only, with no payment recorded. Set{" "}
+              <code>ENABLE_PAYMENT_WRITES=true</code> to also write payments.
+            </>
           )}
         </p>
 
@@ -84,7 +91,12 @@ export default async function ItemsPage() {
             No items found for this connected account.
           </p>
         ) : (
-          <PosView items={items} currencyCode={session.currencyCode ?? DEFAULT_CURRENCY} />
+          <PosView
+            items={items}
+            currencyCode={session.currencyCode ?? DEFAULT_CURRENCY}
+            locale={session.locale ?? DEFAULT_LOCALE}
+            paymentWritesEnabled={paymentWritesEnabled}
+          />
         )}
       </div>
     </div>

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
-import { listRecentOrders } from "@/lib/uniflow";
+import { listRecentOrders } from "@/lib/linktoany";
 import { formatPrice } from "@/lib/currency";
 import OrderTimestamp from "./order-timestamp";
 
@@ -12,11 +12,11 @@ export const instant = false;
 
 export default async function OrdersPage() {
   const session = await getSession();
-  if (!session.uniflowAccountId) {
+  if (!session.linkToAnyAccountId) {
     redirect("/");
   }
 
-  const orders = await listRecentOrders(session.uniflowAccountId);
+  const orders = await listRecentOrders(session.linkToAnyAccountId);
 
   return (
     <div className="flex flex-1 flex-col items-center bg-zinc-50 px-6 py-8 dark:bg-black">
@@ -70,7 +70,7 @@ export default async function OrdersPage() {
                   </div>
                   <div className="shrink-0 text-right text-sm font-medium text-black dark:text-zinc-50">
                     {typeof order.total === "number" &&
-                      formatPrice(order.total, order.currencyCode)}
+                      formatPrice(order.total, order.currencyCode, session.locale)}
                   </div>
                 </div>
               </li>

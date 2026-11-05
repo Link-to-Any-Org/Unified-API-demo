@@ -1,8 +1,7 @@
 # Square integration design notes
 
-Background for the shortcuts in `lib/uniflow.ts`. See the capability-matrix
-and category/item-creation memory for the full live-testing record this was
-derived from; this file is the durable, in-repo summary.
+Background for the shortcuts in `lib/linktoany.ts`: what was confirmed by
+live testing against a real Square account, and what is still unconfirmed.
 
 ## Two category taxonomies
 
@@ -35,20 +34,45 @@ integration were confirmed live (production merchant, Oct 2026):
   Square rounds sub-cent amounts to the nearest cent on write.
 
 Because every payment this app writes is a real, immediate, irreversible
-capture against whatever Square account is connected, the POS UI always
-shows a persistent warning, and every order's `note` field is tagged as a
-simulated-tender demo order.
+capture against whatever Square account is connected, payment writes are
+behind a hard server-side gate: `ENABLE_PAYMENT_WRITES` must be exactly
+`"true"`, otherwise the orders route creates the order only and
+`createOrderPayment` refuses to run. The app can't tell a Square sandbox
+merchant from a production one, so this is an explicit operator opt-in
+rather than inferred from the LinkToAny environment. Every order's `note` is
+also tagged as a simulated-tender demo order.
 
-## `createConnectLink`'s successUrl query string
+If the order succeeds but the payment write fails, the amount, currency and
+a fixed payment `externalId` are kept in the sealed session, and
+`POST /api/square/orders/[orderId]/payment` retries just the payment from
+those values - so a retry can't change the amount or create a second
+capture.
 
-Diagnosed, not directly confirmed (Nov 2026 - every real attempt hit
-`invalid_state`): the SDK's own docs say `createConnectLink`'s hosted flow
-"sends the merchant to successUrl with ?accountId=…", wording that suggests
-it appends its own query string without checking whether `successUrl`
-already has a `?`. If so, a `successUrl` carrying our own `?state=...` CSRF
-nonce would come back as one garbled query param
-(`state=XXXX?accountId=YYYY`) instead of two separate ones, failing the
-state comparison every time. Rather than depend on how LinkToAny merges
-query strings, the OAuth state nonce now travels as a path segment
-(`/api/square/callback/[state]`) instead of a query param, which is correct
-regardless of how the rest of the URL is built.
+## OAuth callback: status
+
+**Not yet confirmed end to end.** As of Nov 2026 no live connect has
+completed with the current callback code. Observed failures so far were
+(a) `invalid_state` when the session cookie didn't survive the round trip
+(seen in a private browsing window), and (b) `CONNECTION_FAILED` reported by
+LinkToAny itself after Square consent, before our callback logic runs. Until
+a connect completes, treat the callback verification below as designed but
+unproven.
+
+### State nonce as a path segment
+
+The SDK's docs say `createConnectLink`'s hosted flow "sends the merchant to
+successUrl with ?accountId=…", which suggests it appends its own query
+string. A `?state=...` in `successUrl` could then come back garbled
+(`state=XXXX?accountId=YYYY`). Rather than depend on how LinkToAny merges
+query strings, the nonce travels as a path segment
+(`/api/square/callback/[state]`), which survives either way.
+
+### Reconnects and the freshness check
+
+The callback rejects an account that wasn't (re)authorized during this flow,
+to avoid trusting a stale connection. A merchant reconnecting may have their
+existing LinkToAny account re-authorized instead of a new one created, so the
+check uses the latest of `auth.getStatus().lastAuthAt`, `updatedAt` and
+`createdAt` rather than `createdAt` alone (which would reject every
+reconnect). Which of these fields LinkToAny actually updates on a Square
+reconnect still needs confirming live.

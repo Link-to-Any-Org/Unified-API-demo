@@ -6,9 +6,21 @@ import { getConfig } from "@/lib/config";
 export interface SquareSessionData {
   // The connected account id returned by the Unified API once Square OAuth
   // completes - what every records.list/create call is scoped to.
-  uniflowAccountId?: string;
+  linkToAnyAccountId?: string;
   merchantName?: string;
   currencyCode?: string;
+  // BCP 47 locale from the merchant's Square location, used to format prices.
+  locale?: string;
+  // Set when an order was created but its payment write failed, so the
+  // merchant can retry just the payment. Kept server-side (in the sealed
+  // session) so the amount can't be changed by the client, and the payment's
+  // own externalId is fixed here so a retry can't capture twice.
+  pendingPayment?: {
+    orderId: string;
+    paymentExternalId: string;
+    amount: number;
+    currencyCode: string;
+  };
   // CSRF protection for the OAuth round trip: minted in the authorize route,
   // echoed back in the successUrl, and checked in the callback route.
   oauthState?: string;

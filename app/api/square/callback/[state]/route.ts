@@ -3,9 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   findSquareAccountForMerchant,
   getReturnUrl,
-  getUniflowClient,
+  getLinkToAnyClient,
   verifySquareConnection,
-} from "@/lib/uniflow";
+} from "@/lib/linktoany";
 import { getSession } from "@/lib/session";
 import { logger } from "@/lib/logger";
 import type { Account } from "@linktoany/sdk";
@@ -33,28 +33,23 @@ export async function GET(
   session.oauthState = undefined;
   session.oauthStateCreatedAt = undefined;
 
-  // The state nonce travels as a path segment, not a query param: LinkToAny
-  // appends its own `?accountId=...&merchantId=...` to our successUrl, and
-  // if that's done without checking for an existing `?` (as its own docs'
-  // phrasing suggests), a query-string state would get silently merged into
-  // one garbled param instead of staying a separate, comparable value.
+  // The state nonce travels as a path segment, not a query param, so it
+  // can't be mangled when LinkToAny appends its own `?accountId=...` to our
+  // successUrl - see docs/square-integration-notes.md.
   const { state } = await params;
   const stateAge = stateCreatedAt ? Date.now() - new Date(stateCreatedAt).getTime() : Infinity;
-  if (!expectedState || !state || state !== expectedState || stateAge > OAUTH_STATE_TTL_MS) {
+  const stateProblem = !expectedState
+    ? "no_state_in_session"
+    : state !== expectedState
+      ? "state_mismatch"
+      : stateAge > OAUTH_STATE_TTL_MS
+        ? "state_expired"
+        : undefined;
+  if (stateProblem) {
     await session.save();
-    // Temporary verbose diagnostics while chasing a reproducing invalid_state
-    // bug - remove once resolved. No secrets here: state is a random nonce,
-    // not a credential, and the rest is just the callback's own query string.
-    logger.warn("square.callback.invalid_state", {
-      requestId,
-      hasExpectedState: Boolean(expectedState),
-      hasReceivedState: Boolean(state),
-      statesMatch: expectedState === state,
-      stateAgeMs: stateAge,
-      pathname: url.pathname,
-      search: url.search,
-      cookiePresent: request.cookies.has("square_session"),
-    });
+    // Reason code only - never the nonce, the connect URL or the callback's
+    // query string.
+    logger.warn("square.callback.invalid_state", { requestId, reason: stateProblem });
     return errorRedirect(appOrigin, "invalid_state");
   }
   const flowStartedAt = new Date(stateCreatedAt!);
@@ -65,7 +60,7 @@ export async function GET(
   const error = url.searchParams.get("error");
   if (error) {
     await session.save();
-    logger.warn("square.callback.provider_error", { requestId, error, search: url.search });
+    logger.warn("square.callback.provider_error", { requestId, error });
     return errorRedirect(appOrigin, "connect_failed");
   }
 
@@ -79,7 +74,7 @@ export async function GET(
 
     let account: Account | undefined;
     if (accountIdParam) {
-      const { data } = await getUniflowClient().accounts.get(accountIdParam);
+      const { data } = await getLinkToAnyClient().accounts.get(accountIdParam);
       account = data;
     } else if (externalId) {
       account = await findSquareAccountForMerchant(externalId);
@@ -91,15 +86,17 @@ export async function GET(
 
     const verified = await verifySquareConnection(account, externalId, flowStartedAt);
 
-    session.uniflowAccountId = verified.account._id;
+    session.linkToAnyAccountId = verified.account._id;
     session.merchantName = verified.merchantName;
     session.currencyCode = verified.currencyCode;
+    session.locale = verified.locale;
+    session.pendingPayment = undefined;
     await session.save();
 
     return NextResponse.redirect(new URL("/items", appOrigin));
   } catch (err) {
     await session.save();
-    logger.error("square.callback.failed", { requestId, accountId: session.uniflowAccountId, err });
+    logger.error("square.callback.failed", { requestId, accountId: session.linkToAnyAccountId, err });
     return errorRedirect(appOrigin, "not_verified");
   }
 }

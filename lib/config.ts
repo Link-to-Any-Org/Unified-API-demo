@@ -1,18 +1,19 @@
 import type { LinkToAnyEnvironment } from "@linktoany/sdk";
 
 export interface AppConfig {
-  uniflowApiKey: string;
-  uniflowOrganisationId?: string;
-  uniflowEnvironment: LinkToAnyEnvironment;
-  uniflowSquareSystemId: string;
-  uniflowReturnUrl: string;
+  linkToAnyApiKey: string;
+  linkToAnyOrganisationId?: string;
+  linkToAnyEnvironment: LinkToAnyEnvironment;
+  linkToAnySquareSystemId: string;
+  linkToAnyReturnUrl: string;
   sessionSecret: string;
   devTunnelOrigin?: string;
-  // LinkToAny's own API tier. The sandbox gate on the payment flow keys off
-  // this, since it is the only environment signal this app has - it says
-  // nothing about whether the connected Square account itself is a Square
-  // sandbox or production merchant.
-  isSandbox: boolean;
+  // Hard gate on the payment write. Off unless ENABLE_PAYMENT_WRITES is
+  // exactly "true": with it off, placing an order creates the Square order
+  // only and never writes a payment record. This app can't tell a Square
+  // sandbox merchant from a production one, so the operator has to opt in
+  // explicitly rather than the app guessing from the LinkToAny environment.
+  paymentWritesEnabled: boolean;
 }
 
 const ENVIRONMENTS: LinkToAnyEnvironment[] = ["dev", "prod"];
@@ -34,15 +35,15 @@ export function loadConfig(): AppConfig {
     return value ?? "";
   }
 
-  const uniflowApiKey = required("UNIFLOW_API_KEY");
-  const uniflowSquareSystemId = required("UNIFLOW_SQUARE_SYSTEM_ID");
-  const uniflowReturnUrl = required("UNIFLOW_RETURN_URL");
+  const linkToAnyApiKey = required("LINKTOANY_API_KEY");
+  const linkToAnySquareSystemId = required("LINKTOANY_SQUARE_SYSTEM_ID");
+  const linkToAnyReturnUrl = required("LINKTOANY_RETURN_URL");
   const sessionSecret = required("SESSION_SECRET");
 
-  const rawEnvironment = readEnv("UNIFLOW_ENVIRONMENT") ?? "dev";
+  const rawEnvironment = readEnv("LINKTOANY_ENVIRONMENT") ?? "dev";
   if (!ENVIRONMENTS.includes(rawEnvironment as LinkToAnyEnvironment)) {
     invalid.push(
-      `UNIFLOW_ENVIRONMENT must be one of ${ENVIRONMENTS.join(", ")}, got "${rawEnvironment}"`
+      `LINKTOANY_ENVIRONMENT must be one of ${ENVIRONMENTS.join(", ")}, got "${rawEnvironment}"`
     );
   }
 
@@ -50,11 +51,11 @@ export function loadConfig(): AppConfig {
     invalid.push("SESSION_SECRET must be at least 32 characters");
   }
 
-  if (uniflowReturnUrl) {
+  if (linkToAnyReturnUrl) {
     try {
-      new URL(uniflowReturnUrl);
+      new URL(linkToAnyReturnUrl);
     } catch {
-      invalid.push(`UNIFLOW_RETURN_URL must be an absolute URL, got "${uniflowReturnUrl}"`);
+      invalid.push(`LINKTOANY_RETURN_URL must be an absolute URL, got "${linkToAnyReturnUrl}"`);
     }
   }
 
@@ -67,14 +68,14 @@ export function loadConfig(): AppConfig {
   }
 
   return {
-    uniflowApiKey,
-    uniflowOrganisationId: readEnv("UNIFLOW_ORGANISATION_ID"),
-    uniflowEnvironment: rawEnvironment as LinkToAnyEnvironment,
-    uniflowSquareSystemId,
-    uniflowReturnUrl,
+    linkToAnyApiKey,
+    linkToAnyOrganisationId: readEnv("LINKTOANY_ORGANISATION_ID"),
+    linkToAnyEnvironment: rawEnvironment as LinkToAnyEnvironment,
+    linkToAnySquareSystemId,
+    linkToAnyReturnUrl,
     sessionSecret,
     devTunnelOrigin: readEnv("DEV_TUNNEL_ORIGIN"),
-    isSandbox: rawEnvironment !== "prod",
+    paymentWritesEnabled: readEnv("ENABLE_PAYMENT_WRITES") === "true",
   };
 }
 

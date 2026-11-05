@@ -9,10 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      UNIFLOW_API_KEY: ci-placeholder
-      UNIFLOW_ENVIRONMENT: dev
-      UNIFLOW_SQUARE_SYSTEM_ID: ci-placeholder
-      UNIFLOW_RETURN_URL: https://ci.example.com/api/square/callback
+      LINKTOANY_API_KEY: ci-placeholder
+      LINKTOANY_ENVIRONMENT: dev
+      LINKTOANY_SQUARE_SYSTEM_ID: ci-placeholder
+      LINKTOANY_RETURN_URL: https://ci.example.com/api/square/callback
       SESSION_SECRET: ci-placeholder-ci-placeholder-ci-placeholder
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +21,8 @@ jobs:
           node-version-file: ".nvmrc"
           cache: "npm"
       - run: npm ci
+      # Fails the build on any high/critical advisory, dev dependencies included.
+      - run: npm audit --audit-level=high
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test

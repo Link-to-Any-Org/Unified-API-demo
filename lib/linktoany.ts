@@ -3,7 +3,8 @@ import { cacheLife, cacheTag } from "next/cache";
 import { LinkToAny, type Account } from "@linktoany/sdk";
 import { getConfig } from "@/lib/config";
 import { ValidationError } from "@/lib/errors";
-import { roundToCurrencyPrecision, DEFAULT_CURRENCY } from "@/lib/currency";
+import { roundToCurrencyPrecision, resolveLocale, DEFAULT_CURRENCY } from "@/lib/currency";
+import { assertConnectionIsFresh } from "@/lib/connection-freshness";
 import {
   assertLineItemCount,
   assertValidQuantity,
@@ -13,20 +14,20 @@ import {
 
 let client: LinkToAny | undefined;
 
-export function getUniflowClient(): LinkToAny {
+export function getLinkToAnyClient(): LinkToAny {
   if (!client) {
     const config = getConfig();
     client = new LinkToAny({
-      apiKey: config.uniflowApiKey,
-      environment: config.uniflowEnvironment,
-      organisationId: config.uniflowOrganisationId,
+      apiKey: config.linkToAnyApiKey,
+      environment: config.linkToAnyEnvironment,
+      organisationId: config.linkToAnyOrganisationId,
     });
   }
   return client;
 }
 
 export function getReturnUrl(): string {
-  return getConfig().uniflowReturnUrl;
+  return getConfig().linkToAnyReturnUrl;
 }
 
 export interface ConnectLinkResult {
@@ -38,18 +39,16 @@ export interface ConnectLinkResult {
 // `auth.connectAccount` would use - the SDK itself recommends
 // `createConnectLink` for Square/Clover/Lightspeed/Shopify for this reason.
 // `state` is appended to successUrl as a path segment, not a query param:
-// LinkToAny's own callback appends its own `?accountId=...&merchantId=...`
-// to whatever successUrl we give it, and doing that without checking for an
-// existing `?` would merge a query-string state into one garbled param
-// instead of leaving it comparable - confirmed live, see
+// LinkToAny appends its own `?accountId=...` to whatever successUrl we give
+// it, and a path segment stays intact however that merge is done - see
 // docs/square-integration-notes.md.
 export async function createSquareConnectLink(
   successUrl: string,
   state: string
 ): Promise<ConnectLinkResult> {
   const config = getConfig();
-  const link = await getUniflowClient().auth.createConnectLink(
-    config.uniflowSquareSystemId,
+  const link = await getLinkToAnyClient().auth.createConnectLink(
+    config.linkToAnySquareSystemId,
     {
       successUrl: `${successUrl.replace(/\/$/, "")}/${encodeURIComponent(state)}`,
     }
@@ -70,9 +69,9 @@ export async function findSquareAccountForMerchant(
   merchantId: string
 ): Promise<Account | undefined> {
   const config = getConfig();
-  const { data } = await getUniflowClient().accounts.listByMerchant(merchantId);
+  const { data } = await getLinkToAnyClient().accounts.listByMerchant(merchantId);
   const matches = data.filter(
-    (account) => accountSystemId(account) === config.uniflowSquareSystemId
+    (account) => accountSystemId(account) === config.linkToAnySquareSystemId
   );
   matches.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
   return matches[0];
@@ -82,11 +81,12 @@ export interface VerifiedConnection {
   account: Account;
   merchantName?: string;
   currencyCode: string;
+  locale: string;
 }
 
 // Confirms the account the callback resolved is genuinely the one this flow
 // started: its platform merchant id matches what the callback reported, it
-// was created after the flow began (not a stale pre-existing account), and
+// was (re)authorized after the flow began (not a stale connection), and
 // LinkToAny itself reports the connection active.
 export async function verifySquareConnection(
   account: Account,
@@ -99,21 +99,26 @@ export async function verifySquareConnection(
     );
   }
 
-  if (account.createdAt) {
-    const createdAt = new Date(account.createdAt);
-    const skewMs = 2 * 60 * 1000;
-    if (createdAt.getTime() < flowStartedAt.getTime() - skewMs) {
-      throw new ValidationError("Account predates this connection attempt");
-    }
-  }
-
-  const status = await getUniflowClient().auth.getStatus(account._id);
+  const status = await getLinkToAnyClient().auth.getStatus(account._id);
   if (!status.data.isAuthenticated) {
     throw new ValidationError(`Account is not active (status: ${status.data.status})`);
   }
 
+  // A merchant reconnecting may get their existing LinkToAny account
+  // re-authorized rather than a new one created, so `createdAt` alone would
+  // reject every reconnect. Freshness is judged on the latest of
+  // lastAuthAt / updatedAt / createdAt instead.
+  assertConnectionIsFresh(
+    [status.data.lastAuthAt, account.updatedAt, account.createdAt],
+    flowStartedAt
+  );
+
   const info = account.externalAccountInfo as
-    | { accounts?: { locations?: { business_name?: string; currency?: string }[] } }
+    | {
+        accounts?: {
+          locations?: { business_name?: string; currency?: string; language_code?: string }[];
+        };
+      }
     | undefined;
   const location = info?.accounts?.locations?.[0];
 
@@ -121,11 +126,12 @@ export async function verifySquareConnection(
     account,
     merchantName: account.name ?? location?.business_name,
     currencyCode: location?.currency ?? DEFAULT_CURRENCY,
+    locale: resolveLocale(location?.language_code),
   };
 }
 
 export async function disconnectAccount(accountId: string): Promise<void> {
-  await getUniflowClient().accounts.delete(accountId);
+  await getLinkToAnyClient().accounts.delete(accountId);
 }
 
 // Confirmed live against this Square integration's current contracts - see
@@ -193,7 +199,7 @@ export async function listCatalogItems(accountId: string): Promise<CatalogItem[]
   cacheTag(`catalog-items:${accountId}`);
 
   const items: CatalogItem[] = [];
-  for await (const raw of getUniflowClient().records.iterate<RawItem>(
+  for await (const raw of getLinkToAnyClient().records.iterate<RawItem>(
     accountId,
     ITEM_ENTITY_TYPE,
     { pageSize: 100 }
@@ -227,7 +233,7 @@ export async function listCategories(accountId: string): Promise<Map<string, Cat
   cacheTag(`catalog-categories:${accountId}`);
 
   const categories = new Map<string, CategoryInfo>();
-  for await (const raw of getUniflowClient().records.iterate<RawCategory>(
+  for await (const raw of getLinkToAnyClient().records.iterate<RawCategory>(
     accountId,
     CATEGORY_ENTITY_TYPE,
     { pageSize: 100 }
@@ -324,7 +330,7 @@ export async function createOrder(
 ): Promise<CreatedOrder> {
   const total = computeOrderTotal(lineItems, currencyCode);
 
-  const result = await getUniflowClient().records.create(accountId, ORDER_ENTITY_TYPE, {
+  const result = await getLinkToAnyClient().records.create(accountId, ORDER_ENTITY_TYPE, {
     externalId,
     currencyCode,
     status: "OPEN",
@@ -351,14 +357,21 @@ export async function createOrder(
 // Always a simulated cash tender - see docs/square-integration-notes.md for
 // why every payment this integration writes is an immediate, irreversible
 // real capture against the connected Square account.
+// `paymentExternalId` is fixed by the caller (and reused on retry) so a retry
+// after an ambiguous failure can't create a second capture for the same order.
+// Only called when ENABLE_PAYMENT_WRITES is on - see lib/config.ts.
 export async function createOrderPayment(
   accountId: string,
   orderExternalId: string,
+  paymentExternalId: string,
   amount: number,
   currency: string
 ): Promise<void> {
-  await getUniflowClient().records.create(accountId, PAYMENT_ENTITY_TYPE, {
-    externalId: randomUUID(),
+  if (!getConfig().paymentWritesEnabled) {
+    throw new Error("Payment writes are disabled (ENABLE_PAYMENT_WRITES is not \"true\")");
+  }
+  await getLinkToAnyClient().records.create(accountId, PAYMENT_ENTITY_TYPE, {
+    externalId: paymentExternalId,
     orderExternalId,
     status: "CAPTURED",
     tenderCategory: "CASH",
@@ -390,7 +403,7 @@ interface RawOrder {
 }
 
 export async function listRecentOrders(accountId: string): Promise<OrderSummary[]> {
-  const page = await getUniflowClient().records.list<RawOrder>(accountId, ORDER_ENTITY_TYPE, {
+  const page = await getLinkToAnyClient().records.list<RawOrder>(accountId, ORDER_ENTITY_TYPE, {
     pageSize: 20,
   });
   return page.data

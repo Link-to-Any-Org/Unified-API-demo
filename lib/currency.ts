@@ -1,15 +1,20 @@
 const DEFAULT_CURRENCY = "USD";
+// Fallback only - the real locale comes from the connected merchant's Square
+// location (see verifySquareConnection) and is passed through explicitly.
+const DEFAULT_LOCALE = "en-US";
 
-// Confirmed live (see memory: square-unified-api-capability-matrix) that the
-// unified order/payment write contracts take decimal currency units (e.g.
-// unitPrice: 9.97), not integer minor units, and that Square's own API
-// rounds sub-cent amounts to the nearest cent on write. So the fix here is
-// rounding to the currency's precision before sending, not switching to
-// integer minor units - that would misinterpret every amount by 100x.
+// The unified order/payment write contracts take decimal currency units
+// (e.g. unitPrice: 9.97), not integer minor units, and Square rounds
+// sub-cent amounts to the nearest cent on write (see
+// docs/square-integration-notes.md). So amounts are rounded to the
+// currency's own precision before sending, rather than converted to minor
+// units - that would misinterpret every amount by 100x.
 export function currencyPrecision(currencyCode: string): number {
   try {
+    // Fraction digits are a property of the currency, not the locale, so any
+    // valid locale gives the same answer here.
     return (
-      new Intl.NumberFormat("en-US", {
+      new Intl.NumberFormat(DEFAULT_LOCALE, {
         style: "currency",
         currency: currencyCode,
       }).resolvedOptions().maximumFractionDigits ?? 2
@@ -25,11 +30,27 @@ export function roundToCurrencyPrecision(amount: number, currencyCode = DEFAULT_
   return Math.round(amount * factor) / factor;
 }
 
-export function formatPrice(amount: number, currencyCode = DEFAULT_CURRENCY): string {
-  return new Intl.NumberFormat("en-US", {
+// Normalises a Square-style locale ("en_US") to BCP 47 ("en-US") and falls
+// back to the default if the runtime doesn't support it.
+export function resolveLocale(locale: string | undefined): string {
+  if (!locale) return DEFAULT_LOCALE;
+  const candidate = locale.replace(/_/g, "-");
+  try {
+    return Intl.NumberFormat.supportedLocalesOf(candidate)[0] ?? DEFAULT_LOCALE;
+  } catch {
+    return DEFAULT_LOCALE;
+  }
+}
+
+export function formatPrice(
+  amount: number,
+  currencyCode = DEFAULT_CURRENCY,
+  locale: string = DEFAULT_LOCALE
+): string {
+  return new Intl.NumberFormat(locale, {
     style: "currency",
     currency: currencyCode,
   }).format(amount);
 }
 
-export { DEFAULT_CURRENCY };
+export { DEFAULT_CURRENCY, DEFAULT_LOCALE };
