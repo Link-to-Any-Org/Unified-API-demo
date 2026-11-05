@@ -11,6 +11,10 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
+    // Pin the workspace root to this project. Without it, a stray lockfile
+    // in a parent directory (e.g. ~/package-lock.json) makes Next guess the
+    // wrong root and warn on every start.
+    root: __dirname,
     rules: {
       "*.css": {
         loaders: ["@tailwindcss/turbopack"],
