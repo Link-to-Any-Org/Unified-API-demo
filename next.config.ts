@@ -1,13 +1,28 @@
 import type { NextConfig } from "next";
 
-// Local dev origins (e.g. an HTTPS tunnel) beyond localhost, for HMR/dev
-// asset loading. Unset by default - set DEV_TUNNEL_ORIGIN to your own
-// tunnel hostname (e.g. from `npx ngrok http 3000`) when you need one.
-const devTunnelOrigin = process.env.DEV_TUNNEL_ORIGIN;
+// Dev origins beyond localhost allowed to load Next's dev resources (HMR,
+// dev chunks). Without this, Next 16 blocks them when the app is opened
+// through a tunnel, and the page never hydrates - buttons render but do
+// nothing. The OAuth return URL's host is always the public address the app
+// is used through, so it's allowed automatically; DEV_TUNNEL_ORIGIN can add
+// another host.
+function hostOf(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).host;
+  } catch {
+    return undefined;
+  }
+}
+
+const devOrigins = [
+  process.env.DEV_TUNNEL_ORIGIN,
+  hostOf(process.env.LINKTOANY_RETURN_URL),
+].filter((origin): origin is string => Boolean(origin));
 
 const nextConfig: NextConfig = {
   agentRules: false,
-  allowedDevOrigins: devTunnelOrigin ? [devTunnelOrigin] : undefined,
+  allowedDevOrigins: devOrigins.length > 0 ? [...new Set(devOrigins)] : undefined,
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {

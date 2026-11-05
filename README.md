@@ -87,10 +87,12 @@ so local development needs an HTTPS tunnel in front of `localhost:3000`, e.g.:
 npx ngrok http 3000
 ```
 
-Register the tunnel's HTTPS URL + `/api/square/callback` as `LINKTOANY_RETURN_URL`,
-and set `DEV_TUNNEL_ORIGIN` to the tunnel's bare hostname so Next's dev server
-accepts requests through it. Then open the tunnel URL, click **Connect to
-Square**, and you'll land on `/items` once the connection is verified.
+Register the tunnel's HTTPS URL + `/api/square/callback` as `LINKTOANY_RETURN_URL`.
+Its host is automatically allowed as a Next dev origin, so the dev server's
+HMR and client chunks work through the tunnel (set `DEV_TUNNEL_ORIGIN` only to
+allow an additional host). Restart `npm run dev` after changing the tunnel
+URL. Then open the tunnel URL, click **Connect to Square**, and you'll land on
+`/items` once the connection is verified.
 
 ## How it works
 
@@ -131,7 +133,7 @@ Square**, and you'll land on `/items` once the connection is verified.
 | Placing an order returns `207` | The order was created but the payment write failed; the order id in the response is real and visible in `/orders`. The POS screen offers **Retry payment**, which re-sends only the payment with the same amount and payment id. |
 | Orders are created but no payment appears in Square | Expected unless `ENABLE_PAYMENT_WRITES=true`. |
 | Placing an order returns `429` | More than 30 order requests from this account within a minute (in-memory limiter, resets on redeploy). |
-| Client-side hydration/interactivity silently breaks in dev | You're accessing the app through a tunnel but didn't set `DEV_TUNNEL_ORIGIN`. |
+| Buttons render but do nothing in dev (e.g. items can't be added to the cart); browser console shows `/_next/hmr` websocket failures | You're opening the app on a host Next doesn't allow as a dev origin, so the page never hydrates. Open it on `LINKTOANY_RETURN_URL`'s host (allowed automatically) or add the host to `DEV_TUNNEL_ORIGIN`, then restart `npm run dev`. |
 
 ## Known limitations
 
