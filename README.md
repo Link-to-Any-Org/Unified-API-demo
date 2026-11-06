@@ -29,7 +29,7 @@ implementation.
 | `/items` | GET | POS screen: catalog grid + cart. |
 | `/api/square/orders` | POST | Validates a cart, re-prices it from the server's own catalog read, and creates an order - plus a simulated payment only when `ENABLE_PAYMENT_WRITES=true`. |
 | `/api/square/orders/[orderId]/payment` | POST | Retries just the payment for an order whose payment write failed, using the amount and payment id kept in the session. |
-| `/orders` | GET | Recent orders list. |
+| `/orders` | GET | The 20 newest orders from the last 30 days. |
 
 ## Prerequisites
 
@@ -99,10 +99,11 @@ URL. Then open the tunnel URL, click **Connect to Square**, and you'll land on
 - **Merchant-id lookup**: Square is a hosted-consent integration - LinkToAny
   resolves the merchant identity itself during OAuth and reports it back as
   `external_id` on the callback, rather than us ever seeing Square
-  credentials. The callback looks the account up by that merchant id,
-  confirms it was created or re-authorized after this flow started (so a
-  merchant reconnecting an existing account isn't rejected), and confirms
-  `auth.getStatus` reports it active, before trusting it.
+  credentials. The callback looks the account up by that merchant id
+  (taking the most recently updated one, since reconnecting re-authorizes an
+  existing account rather than creating a new one), confirms it was created
+  or re-authorized after this flow started, and confirms `auth.getStatus`
+  reports it active, before trusting it.
 - **Two category taxonomies**: a Square catalog has independent `REGULAR`
   (POS/reporting) and `MENU` (online ordering) categories, and an item often
   belongs to one of each. See
@@ -115,8 +116,9 @@ URL. Then open the tunnel URL, click **Connect to Square**, and you'll land on
   `ENABLE_PAYMENT_WRITES=true` does it then write an immediate `payment`
   record against it, tagged as a simulated cash tender. The merchant name and
   currency come from the account's unified `location` record (read once at
-  connect time); the unified location has no language field, so prices are
-  formatted in `en-US`. See
+  connect time). The location has no language field, so prices are
+  formatted in the merchant's currency and the viewer's browser language
+  (`Accept-Language`, falling back to `en-US`). See
   [`docs/square-integration-notes.md`](docs/square-integration-notes.md) for
   what's actually confirmed to work in that write path (idempotency keys,
   totals, why payment status is ignored, why there's no refund path).

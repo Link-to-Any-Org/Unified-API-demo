@@ -52,7 +52,9 @@ capture.
 
 **Confirmed end to end (Nov 5 2026, production Square merchant):** state
 check, account lookup by `external_id`, freshness and `auth.getStatus`
-verification all passed and the merchant landed on `/items`.
+verification all passed and the merchant landed on `/items`. An order with
+its payment was then placed through the app on Nov 6 (see "Reading recent
+orders" below).
 
 Failures hit along the way, for anyone debugging a repeat:
 
@@ -65,8 +67,8 @@ Failures hit along the way, for anyone debugging a repeat:
   app id, so the consent screen looks identical either way.
 - `stale_link` / `no_state_in_session`: sign-in finished in an older Square
   tab whose link had already been used, or Connect was clicked on a different
-  host than `LINKTOANY_RETURN_URL` (the home page now only offers Connect on
-  that host).
+  host than `LINKTOANY_RETURN_URL` (e.g. `localhost` while the return URL is
+  the tunnel - the state cookie is per host).
 - `invalid_state` in a private browsing window, where the session cookie
   didn't survive the round trip.
 
@@ -86,7 +88,49 @@ to avoid trusting a stale connection. A merchant reconnecting may have their
 existing LinkToAny account re-authorized instead of a new one created, so the
 check uses the latest of `auth.getStatus().lastAuthAt`, `updatedAt` and
 `createdAt` rather than `createdAt` alone (which would reject every
-reconnect). Observed live: connecting again after a disconnect creates a new
-account (`createdAt`, `updatedAt` and `lastAuthAt` all set during the flow).
-Re-authorizing an account that was never disconnected hasn't been observed
-yet; `lastAuthAt` is the field expected to move in that case.
+reconnect).
+
+Observed live on LinkToAny:
+
+- Connecting again after a disconnect creates a new account (`createdAt`,
+  `updatedAt` and `lastAuthAt` all set during the flow).
+- Connecting again **without** disconnecting re-authorizes the existing
+  account (Nov 6 2026): its `createdAt` stayed at Nov 5 16:04 UTC while
+  `lastAuthAt` and `updatedAt` both moved to the reconnect time (06:12:49
+  UTC, 0.2s apart). So a `createdAt`-only check would have rejected it; the
+  `lastAuthAt` / `updatedAt` check accepts it (covered by a test using those
+  exact timestamps).
+- The callback only receives `provider` and `external_id` (the merchant id),
+  so the account is looked up by merchant. One merchant can have several
+  accounts on the same system (this test merchant has five), so the lookup
+  picks the most recently **updated** one - the one the flow just
+  (re)authorized - not the newest-created one, which could be an account the
+  flow never touched.
+
+A successful callback logs `square.callback.connected` with `reconnect:
+true|false`, so a reconnect can be confirmed from the server log.
+
+## Reading recent orders
+
+Unified `order` reads for Square come back **oldest first** (a plain first
+page for the test merchant started in March), and `pageSize` is capped at 200
+for this contract. `/orders` therefore reads with `since`, starting with the
+last day and widening to 7 and then 30 days only until there are 20 orders,
+following `pagination.cursor` within each window, and shows the newest 20.
+The only supported order filters are `externalId`, `status`,
+`orderTypeExternalId`, `customerExternalId`, `locationExternalId` and
+`since` - `createdAfter` is rejected with `UNKNOWN_FILTER`. `since` means
+"changed since", so an old order updated recently can also appear.
+
+Confirmed live (Nov 6 2026): an order placed from the POS with
+`ENABLE_PAYMENT_WRITES=true` came back `CLOSED` with `total` 120, `paidTotal`
+120 and `balanceDue` 0, carrying the demo note, and is the first row of
+`/orders`.
+
+## Price formatting
+
+The unified `location` record has `name`, `currency`, `timezone`, `phone`,
+`status` and service hours, but no language. Prices are therefore formatted
+in the merchant's currency and the **viewer's** language, taken from the
+request's `Accept-Language` header on the server (so server render and
+hydration match), falling back to `en-US`.
