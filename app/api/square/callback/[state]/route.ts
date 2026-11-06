@@ -95,9 +95,17 @@ export async function GET(
     session.linkToAnyAccountId = verified.account._id;
     session.merchantName = verified.merchantName;
     session.currencyCode = verified.currencyCode;
-    session.locale = verified.locale;
     session.pendingPayment = undefined;
     await session.save();
+    logger.info("square.callback.connected", {
+      requestId,
+      accountId: verified.account._id,
+      // true when LinkToAny re-authorized an account that existed before this
+      // flow (a reconnect) rather than creating a new one.
+      reconnect: Boolean(
+        verified.account.createdAt && new Date(verified.account.createdAt) < flowStartedAt
+      ),
+    });
 
     return NextResponse.redirect(new URL("/items", appOrigin));
   } catch (err) {

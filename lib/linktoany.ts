@@ -3,8 +3,11 @@ import { cacheLife, cacheTag } from "next/cache";
 import { LinkToAny, type Account } from "@linktoany/sdk";
 import { getConfig } from "@/lib/config";
 import { ValidationError } from "@/lib/errors";
-import { roundToCurrencyPrecision, resolveLocale, DEFAULT_CURRENCY } from "@/lib/currency";
+import { roundToCurrencyPrecision, DEFAULT_CURRENCY } from "@/lib/currency";
 import { assertConnectionIsFresh } from "@/lib/connection-freshness";
+import { pickMostRecentlyAuthorized } from "@/lib/account-selection";
+import { collectRecentRecords } from "@/lib/recent-records";
+import { logger } from "@/lib/logger";
 import {
   assertLineItemCount,
   assertValidQuantity,
@@ -104,15 +107,13 @@ export async function findSquareAccountForMerchant(
   const matches = data.filter(
     (account) => accountSystemId(account) === config.linkToAnySquareSystemId
   );
-  matches.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
-  return matches[0];
+  return pickMostRecentlyAuthorized(matches);
 }
 
 export interface VerifiedConnection {
   account: Account;
   merchantName?: string;
   currencyCode: string;
-  locale: string;
 }
 
 // Confirms the account the callback resolved is genuinely the one this flow
@@ -152,16 +153,12 @@ export async function verifySquareConnection(
     account,
     merchantName: location?.name ?? account.name,
     currencyCode: location?.currency ?? DEFAULT_CURRENCY,
-    // The unified location contract has no language field, so this is the
-    // default locale unless a future mapping adds one.
-    locale: resolveLocale(location?.languageCode),
   };
 }
 
 interface RawLocation {
   name?: string;
   currency?: string;
-  languageCode?: string;
   status?: string;
 }
 
@@ -450,11 +447,31 @@ interface RawOrder {
   lineItems?: Array<{ name?: string; quantity?: number }>;
 }
 
+export const RECENT_ORDERS_LIMIT = 20;
+export const RECENT_ORDERS_MAX_DAYS = 30;
+
+// Square returns orders oldest first, so a plain first page shows the
+// merchant's oldest orders. Read by `since` instead - see lib/recent-records.ts.
 export async function listRecentOrders(accountId: string): Promise<OrderSummary[]> {
-  const page = await getLinkToAnyClient().records.list<RawOrder>(accountId, ORDER_ENTITY_TYPE, {
-    pageSize: 20,
-  });
-  return page.data
+  const { records, truncated } = await collectRecentRecords<RawOrder>(
+    ({ since, pageSize, cursor }) =>
+      getLinkToAnyClient().records.list<RawOrder>(accountId, ORDER_ENTITY_TYPE, {
+        since,
+        pageSize,
+        ...(cursor ? { cursor } : {}),
+      }),
+    {
+      limit: RECENT_ORDERS_LIMIT,
+      windowsInDays: [1, 7, RECENT_ORDERS_MAX_DAYS],
+      // The unified order contract's maximum page size for Square.
+      pageSize: 200,
+      maxPagesPerWindow: 5,
+    }
+  );
+  if (truncated) {
+    logger.warn("square.orders.list_truncated", { accountId });
+  }
+  return records
     .filter((order): order is RawOrder & { externalId: string } => Boolean(order.externalId))
     .map(
       (order): OrderSummary => ({
