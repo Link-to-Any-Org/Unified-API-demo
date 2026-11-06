@@ -110,6 +110,13 @@ Observed live on LinkToAny:
 A successful callback logs `square.callback.connected` with `reconnect:
 true|false`, so a reconnect can be confirmed from the server log.
 
+**Confirmed end to end (Nov 6 2026, 12:41 UTC):** a reconnect started from
+the registered host, without disconnecting first, went through our callback
+and landed on `/items`. The log showed `square.callback.connected` with
+`reconnect: true` for the existing account, whose `createdAt` stayed at
+Nov 5 16:04 UTC while `lastAuthAt` and `updatedAt` moved to 12:41:49 UTC. No
+new account was created.
+
 ## Reading recent orders
 
 Unified `order` reads for Square come back **oldest first** (a plain first
