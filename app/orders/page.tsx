@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
-import { listRecentOrders } from "@/lib/linktoany";
+import { listRecentOrders, RECENT_ORDERS_MAX_DAYS } from "@/lib/linktoany";
 import { formatPrice } from "@/lib/currency";
+import { getRequestLocale } from "@/lib/request-locale";
 import OrderTimestamp from "./order-timestamp";
 
 // Reads the session cookie and the account's live order list on every
@@ -16,7 +17,10 @@ export default async function OrdersPage() {
     redirect("/");
   }
 
-  const orders = await listRecentOrders(session.linkToAnyAccountId);
+  const [orders, locale] = await Promise.all([
+    listRecentOrders(session.linkToAnyAccountId),
+    getRequestLocale(),
+  ]);
 
   return (
     <div className="flex flex-1 flex-col items-center bg-zinc-50 px-6 py-8 dark:bg-black">
@@ -42,7 +46,7 @@ export default async function OrdersPage() {
 
         {orders.length === 0 ? (
           <p className="text-zinc-600 dark:text-zinc-400">
-            No orders yet. Place one from the POS screen.
+            No orders in the last {RECENT_ORDERS_MAX_DAYS} days. Place one from the POS screen.
           </p>
         ) : (
           <ul className="flex flex-col gap-3">
@@ -70,7 +74,7 @@ export default async function OrdersPage() {
                   </div>
                   <div className="shrink-0 text-right text-sm font-medium text-black dark:text-zinc-50">
                     {typeof order.total === "number" &&
-                      formatPrice(order.total, order.currencyCode, session.locale)}
+                      formatPrice(order.total, order.currencyCode, locale)}
                   </div>
                 </div>
               </li>
