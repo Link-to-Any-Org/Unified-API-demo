@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Square Catalog Viewer",
+  title: "Square POS Demo",
   description: "Connect your Square account and browse your item catalog.",
 };
 
