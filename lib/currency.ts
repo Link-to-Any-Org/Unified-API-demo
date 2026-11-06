@@ -1,6 +1,7 @@
 const DEFAULT_CURRENCY = "USD";
-// Fallback only - the real locale comes from the connected merchant's Square
-// location (see verifySquareConnection) and is passed through explicitly.
+// Fallback only. Prices are formatted in the viewer's own language (from the
+// request's Accept-Language - see lib/request-locale.ts) and the merchant's
+// currency; the unified Square location carries a currency but no language.
 const DEFAULT_LOCALE = "en-US";
 
 // The unified order/payment write contracts take decimal currency units
@@ -40,6 +41,32 @@ export function resolveLocale(locale: string | undefined): string {
   } catch {
     return DEFAULT_LOCALE;
   }
+}
+
+// Picks the highest-weighted language from an Accept-Language header
+// ("fr-CH, fr;q=0.9, en;q=0.8, *;q=0.5") that the runtime can format with.
+export function localeFromAcceptLanguage(header: string | null | undefined): string {
+  if (!header) return DEFAULT_LOCALE;
+  const candidates = header
+    .split(",")
+    .map((part, index) => {
+      const [tag, ...params] = part.trim().split(";");
+      const qParam = params.map((p) => p.trim()).find((p) => p.startsWith("q="));
+      const q = qParam ? Number(qParam.slice(2)) : 1;
+      return { tag: tag.trim(), q: Number.isFinite(q) ? q : 0, index };
+    })
+    .filter((entry) => entry.tag && entry.tag !== "*" && entry.q > 0)
+    .sort((a, b) => b.q - a.q || a.index - b.index);
+
+  for (const { tag } of candidates) {
+    try {
+      const [supported] = Intl.NumberFormat.supportedLocalesOf(tag);
+      if (supported) return supported;
+    } catch {
+      // Malformed tag - try the next one.
+    }
+  }
+  return DEFAULT_LOCALE;
 }
 
 export function formatPrice(

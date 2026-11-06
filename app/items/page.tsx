@@ -2,7 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { listCategories, listCatalogItems, resolveItemCategory, type CatalogItem } from "@/lib/linktoany";
-import { DEFAULT_CURRENCY, DEFAULT_LOCALE } from "@/lib/currency";
+import { DEFAULT_CURRENCY } from "@/lib/currency";
+import { getRequestLocale } from "@/lib/request-locale";
 import { getConfig } from "@/lib/config";
 import PosView from "./pos-view";
 
@@ -19,9 +20,10 @@ export default async function ItemsPage() {
   }
 
   const { paymentWritesEnabled } = getConfig();
-  const [rawItems, categories] = await Promise.all([
+  const [rawItems, categories, locale] = await Promise.all([
     listCatalogItems(session.linkToAnyAccountId),
     listCategories(session.linkToAnyAccountId),
+    getRequestLocale(),
   ]);
 
   const items: Array<CatalogItem & { category?: string }> = rawItems.map((item) => {
@@ -94,7 +96,7 @@ export default async function ItemsPage() {
           <PosView
             items={items}
             currencyCode={session.currencyCode ?? DEFAULT_CURRENCY}
-            locale={session.locale ?? DEFAULT_LOCALE}
+            locale={locale}
             paymentWritesEnabled={paymentWritesEnabled}
           />
         )}

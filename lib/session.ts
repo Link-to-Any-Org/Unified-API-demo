@@ -9,8 +9,6 @@ export interface SquareSessionData {
   linkToAnyAccountId?: string;
   merchantName?: string;
   currencyCode?: string;
-  // BCP 47 locale from the merchant's Square location, used to format prices.
-  locale?: string;
   // Set when an order was created but its payment write failed, so the
   // merchant can retry just the payment. Kept server-side (in the sealed
   // session) so the amount can't be changed by the client, and the payment's
