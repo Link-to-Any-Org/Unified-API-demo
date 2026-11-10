@@ -48,6 +48,16 @@ function cartKeyFor(itemId: string, variationId: string): string {
   return `${itemId}:${variationId}`;
 }
 
+// `crypto.randomUUID` only exists in secure contexts (HTTPS or localhost);
+// `getRandomValues` is available everywhere, so plain-HTTP dev on a LAN
+// address still gets a usable key.
+function newIdempotencyKey(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function parseJsonResponse(response: Response): Promise<Record<string, unknown>> {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
@@ -88,9 +98,18 @@ export default function PosView({ items, currencyCode, locale, paymentWritesEnab
     return map;
   }, [lines]);
 
+  // The idempotency key identifies one exact cart. Any change to the cart's
+  // contents starts a new attempt, otherwise a resubmit after a failure would
+  // reuse the externalId of an order that may already exist and rewrite it
+  // with different lines.
+  function invalidateIdempotencyKey() {
+    idempotencyKeyRef.current = null;
+  }
+
   function addToCart(item: CatalogItem, variation: CatalogItemVariation) {
     if (typeof variation.price !== "number") return;
     setResult(null);
+    invalidateIdempotencyKey();
     const key = cartKeyFor(item.id, variation.id);
     setCart((prev) => {
       const existing = prev[key];
@@ -110,6 +129,7 @@ export default function PosView({ items, currencyCode, locale, paymentWritesEnab
   }
 
   function updateQuantity(cartKey: string, delta: number) {
+    invalidateIdempotencyKey();
     setCart((prev) => {
       const line = prev[cartKey];
       if (!line) return prev;
@@ -132,7 +152,7 @@ export default function PosView({ items, currencyCode, locale, paymentWritesEnab
   async function placeOrder() {
     if (lines.length === 0) return;
     if (!idempotencyKeyRef.current) {
-      idempotencyKeyRef.current = crypto.randomUUID();
+      idempotencyKeyRef.current = newIdempotencyKey();
     }
     setPlacing(true);
     setResult(null);
@@ -151,9 +171,9 @@ export default function PosView({ items, currencyCode, locale, paymentWritesEnab
       const data = await parseJsonResponse(response);
 
       if (response.status === 207) {
-        // The order exists; only its payment failed. Keep the idempotency key
-        // (a resubmit would map to the same order) and offer a payment-only
-        // retry instead of leaving the merchant with an unpaid open order.
+        // The order exists; only its payment failed. Offer a payment-only
+        // retry instead of leaving the merchant with an unpaid open order. The
+        // idempotency key is kept only until the cart changes again.
         setResult({
           type: "partial",
           orderId: String(data.orderId ?? "order"),

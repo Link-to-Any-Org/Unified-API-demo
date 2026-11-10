@@ -24,7 +24,7 @@ vi.mock("@/lib/session", () => ({ getSession: async () => ({ save: vi.fn() }) })
 vi.mock("@/lib/system-profile", () => ({
   getSystemProfile: async () => ({ connect: state.connect }),
 }));
-vi.mock("@/lib/rate-limit", () => ({ checkRateLimit: () => state.rateLimitOk }));
+vi.mock("@/lib/rate-limit", () => ({ checkRateLimit: () => state.rateLimitOk, clientRateLimitKey: () => "ip:test" }));
 vi.mock("@/lib/logger", () => ({ logger }));
 
 const { POST } = await import("@/app/api/connect/credentials/route");
@@ -121,7 +121,7 @@ describe("POST /api/connect/credentials", () => {
   it("is rate limited", async () => {
     state.rateLimitOk = false;
     const res = await submit({ merchantId: "M1", personalToken: SECRET });
-    expect(location(res)).toBe("/?error=rate_limited");
+    expect(location(res)).toBe("/?error=too_many_attempts");
     expect(linktoany.connectWithCredentials).not.toHaveBeenCalled();
   });
 });

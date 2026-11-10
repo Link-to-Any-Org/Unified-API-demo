@@ -14,7 +14,6 @@ export interface AppConfig {
   linkToAnyApplication?: string;
   linkToAnyReturnUrl: string;
   sessionSecret: string;
-  devTunnelOrigin?: string;
   // Hard gate on the payment write. Off unless ENABLE_PAYMENT_WRITES is
   // exactly "true": with it off, placing an order creates the order only and
   // never writes a payment record. This app can't tell a sandbox merchant
@@ -90,7 +89,6 @@ export function loadConfig(): AppConfig {
     linkToAnyApplication: readEnvWithLegacy("LINKTOANY_APPLICATION", "LINKTOANY_SQUARE_APPLICATION"),
     linkToAnyReturnUrl,
     sessionSecret,
-    devTunnelOrigin: readEnv("DEV_TUNNEL_ORIGIN"),
     paymentWritesEnabled: readEnv("ENABLE_PAYMENT_WRITES") === "true",
   };
 }

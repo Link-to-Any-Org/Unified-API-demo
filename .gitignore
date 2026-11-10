@@ -24,8 +24,10 @@
 .DS_Store
 *.pem
 
-# editor/agent tooling (local only)
-.claude/
+# Claude Code: only the shared dev-server launch config is tracked; personal
+# state (settings.local.json) and the app's worktrees/ stay local.
+.claude/*
+!.claude/launch.json
 
 # debug
 npm-debug.log*

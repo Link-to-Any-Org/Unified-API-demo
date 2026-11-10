@@ -31,18 +31,6 @@ export function roundToCurrencyPrecision(amount: number, currencyCode = DEFAULT_
   return Math.round(amount * factor) / factor;
 }
 
-// Normalises a provider-style locale ("en_US") to BCP 47 ("en-US") and falls
-// back to the default if the runtime doesn't support it.
-export function resolveLocale(locale: string | undefined): string {
-  if (!locale) return DEFAULT_LOCALE;
-  const candidate = locale.replace(/_/g, "-");
-  try {
-    return Intl.NumberFormat.supportedLocalesOf(candidate)[0] ?? DEFAULT_LOCALE;
-  } catch {
-    return DEFAULT_LOCALE;
-  }
-}
-
 // Picks the highest-weighted language from an Accept-Language header
 // ("fr-CH, fr;q=0.9, en;q=0.8, *;q=0.5") that the runtime can format with.
 export function localeFromAcceptLanguage(header: string | null | undefined): string {

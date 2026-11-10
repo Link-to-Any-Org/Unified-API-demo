@@ -6,7 +6,7 @@ import { storeConnection } from "@/lib/connect-session";
 import { getSession } from "@/lib/session";
 import { getSystemProfile } from "@/lib/system-profile";
 import { logger } from "@/lib/logger";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimit, clientRateLimitKey } from "@/lib/rate-limit";
 import { BodyTooLargeError, readBodyWithLimit } from "@/lib/read-body";
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -26,10 +26,10 @@ export async function POST(request: NextRequest) {
   const requestId = randomUUID();
   const appOrigin = new URL(getReturnUrl()).origin;
 
-  // One shared bucket: the account doesn't exist yet, and this blunts
-  // credential guessing on a single-instance demo.
-  if (!checkRateLimit("connect-credentials")) {
-    return redirectTo(appOrigin, "/?error=rate_limited");
+  // The account doesn't exist yet, so this is keyed by client address; it
+  // blunts credential guessing.
+  if (!checkRateLimit(clientRateLimitKey(request))) {
+    return redirectTo(appOrigin, "/?error=too_many_attempts");
   }
 
   let submitted: URLSearchParams;

@@ -11,7 +11,7 @@ function errorMessageFor(code: string | undefined, systemName: string): string |
     not_verified: `We couldn't verify the ${systemName} connection. Please try again.`,
     invalid_credentials: `${systemName} rejected those credentials. Check them and try again.`,
     missing_fields: "Fill in every field to connect.",
-    rate_limited: "Too many connection attempts. Wait a minute and try again.",
+    too_many_attempts: "Too many connection attempts from this address. Wait a minute and try again.",
   };
   return messages[code] ?? `Something went wrong connecting to ${systemName}.`;
 }
