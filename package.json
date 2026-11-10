@@ -1,13 +1,19 @@
 {
-  "name": "unified-api-square",
+  "name": "linktoany-square-pos-demo",
   "version": "0.1.0",
   "private": true,
+  "description": "Square POS demo built on the LinkToAny Unified API.",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "uniflow:discover": "node --env-file=.env.local scripts/uniflow-discover.mjs"
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "linktoany:discover": "node --env-file=.env.local scripts/linktoany-discover.mjs"
   },
   "dependencies": {
     "@linktoany/sdk": "^0.4.0",
@@ -18,12 +24,18 @@
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
-    "@types/node": "^20",
+    "@types/node": "^22.20.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    }
   }
 }

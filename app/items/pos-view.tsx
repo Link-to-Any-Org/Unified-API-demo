@@ -1,13 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { CatalogItem, CatalogItemVariation } from "@/lib/uniflow";
+import { useMemo, useRef, useState } from "react";
+import type { CatalogItem, CatalogItemVariation } from "@/lib/linktoany";
+import { formatPrice } from "@/lib/currency";
 
 interface PosViewProps {
   items: Array<CatalogItem & { category?: string }>;
+  currencyCode: string;
+  locale: string;
+  paymentWritesEnabled: boolean;
 }
 
 interface CartLine {
+  cartKey: string;
   variationId: string;
   itemId: string;
   itemName: string;
@@ -17,7 +22,8 @@ interface CartLine {
 }
 
 type OrderResult =
-  | { type: "success"; orderId: string; total: string }
+  | { type: "success"; orderId: string; total: string; paymentRecorded: boolean }
+  | { type: "partial"; orderId: string; total: string; message: string; retryable: boolean }
   | { type: "error"; message: string };
 
 const ACCENT_COLORS = [
@@ -38,14 +44,29 @@ function accentColorFor(key: string): string {
   return ACCENT_COLORS[hash % ACCENT_COLORS.length];
 }
 
-function formatPrice(amount: number, currency = "USD"): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-  }).format(amount);
+function cartKeyFor(itemId: string, variationId: string): string {
+  return `${itemId}:${variationId}`;
 }
 
-export default function PosView({ items }: PosViewProps) {
+// `crypto.randomUUID` only exists in secure contexts (HTTPS or localhost);
+// `getRandomValues` is available everywhere, so plain-HTTP dev on a LAN
+// address still gets a usable key.
+function newIdempotencyKey(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function parseJsonResponse(response: Response): Promise<Record<string, unknown>> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(`Unexpected response (status ${response.status})`);
+  }
+  return response.json();
+}
+
+export default function PosView({ items, currencyCode, locale, paymentWritesEnabled }: PosViewProps) {
   const categories = useMemo(() => {
     const seen = new Set<string>();
     for (const item of items) {
@@ -58,6 +79,7 @@ export default function PosView({ items }: PosViewProps) {
   const [cart, setCart] = useState<Record<string, CartLine>>({});
   const [placing, setPlacing] = useState(false);
   const [result, setResult] = useState<OrderResult | null>(null);
+  const idempotencyKeyRef = useRef<string | null>(null);
 
   const visibleItems = useMemo(() => {
     if (activeCategory === "ALL") return items;
@@ -76,14 +98,25 @@ export default function PosView({ items }: PosViewProps) {
     return map;
   }, [lines]);
 
+  // The idempotency key identifies one exact cart. Any change to the cart's
+  // contents starts a new attempt, otherwise a resubmit after a failure would
+  // reuse the externalId of an order that may already exist and rewrite it
+  // with different lines.
+  function invalidateIdempotencyKey() {
+    idempotencyKeyRef.current = null;
+  }
+
   function addToCart(item: CatalogItem, variation: CatalogItemVariation) {
     if (typeof variation.price !== "number") return;
     setResult(null);
+    invalidateIdempotencyKey();
+    const key = cartKeyFor(item.id, variation.id);
     setCart((prev) => {
-      const existing = prev[variation.id];
+      const existing = prev[key];
       return {
         ...prev,
-        [variation.id]: {
+        [key]: {
+          cartKey: key,
           variationId: variation.id,
           itemId: item.id,
           itemName: item.name,
@@ -95,27 +128,32 @@ export default function PosView({ items }: PosViewProps) {
     });
   }
 
-  function updateQuantity(variationId: string, delta: number) {
+  function updateQuantity(cartKey: string, delta: number) {
+    invalidateIdempotencyKey();
     setCart((prev) => {
-      const line = prev[variationId];
+      const line = prev[cartKey];
       if (!line) return prev;
       const nextQuantity = line.quantity + delta;
       if (nextQuantity <= 0) {
         const next = { ...prev };
-        delete next[variationId];
+        delete next[cartKey];
         return next;
       }
-      return { ...prev, [variationId]: { ...line, quantity: nextQuantity } };
+      return { ...prev, [cartKey]: { ...line, quantity: nextQuantity } };
     });
   }
 
   function clearCart() {
     setCart({});
     setResult(null);
+    idempotencyKeyRef.current = null;
   }
 
   async function placeOrder() {
     if (lines.length === 0) return;
+    if (!idempotencyKeyRef.current) {
+      idempotencyKeyRef.current = newIdempotencyKey();
+    }
     setPlacing(true);
     setResult(null);
     try {
@@ -123,28 +161,81 @@ export default function PosView({ items }: PosViewProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          idempotencyKey: idempotencyKeyRef.current,
           lineItems: lines.map((line) => ({
             variationExternalId: line.variationId,
-            name: line.variationName ? `${line.itemName} (${line.variationName})` : line.itemName,
             quantity: line.quantity,
-            unitPrice: line.unitPrice,
           })),
         }),
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error ?? "Failed to create order");
+      const data = await parseJsonResponse(response);
+
+      if (response.status === 207) {
+        // The order exists; only its payment failed. Offer a payment-only
+        // retry instead of leaving the merchant with an unpaid open order. The
+        // idempotency key is kept only until the cart changes again.
+        setResult({
+          type: "partial",
+          orderId: String(data.orderId ?? "order"),
+          total: formatPrice(Number(data.total ?? total), String(data.currencyCode ?? currencyCode), locale),
+          message: String(data.error ?? "Payment was not recorded"),
+          retryable: data.retryable === true,
+        });
+        setCart({});
+        return;
       }
+
+      if (!response.ok) {
+        throw new Error(typeof data.error === "string" ? data.error : "Failed to create order");
+      }
+
       setResult({
         type: "success",
-        orderId: data.orderId ?? "order",
-        total: formatPrice(data.total ?? total, data.currencyCode),
+        orderId: String(data.orderId ?? "order"),
+        total: formatPrice(Number(data.total ?? total), String(data.currencyCode ?? currencyCode), locale),
+        paymentRecorded: data.paymentRecorded === true,
       });
       setCart({});
+      idempotencyKeyRef.current = null;
     } catch (err) {
       setResult({
         type: "error",
         message: err instanceof Error ? err.message : "Failed to create order",
+      });
+    } finally {
+      setPlacing(false);
+    }
+  }
+
+  async function retryPayment() {
+    if (result?.type !== "partial") return;
+    const pending = result;
+    setPlacing(true);
+    try {
+      const response = await fetch(
+        `/api/square/orders/${encodeURIComponent(pending.orderId)}/payment`,
+        { method: "POST" }
+      );
+      const data = await parseJsonResponse(response);
+      if (!response.ok) {
+        setResult({
+          ...pending,
+          message: typeof data.error === "string" ? data.error : "Retrying the payment failed",
+          retryable: data.retryable === true,
+        });
+        return;
+      }
+      setResult({
+        type: "success",
+        orderId: pending.orderId,
+        total: pending.total,
+        paymentRecorded: true,
+      });
+      idempotencyKeyRef.current = null;
+    } catch (err) {
+      setResult({
+        ...pending,
+        message: err instanceof Error ? err.message : "Retrying the payment failed",
       });
     } finally {
       setPlacing(false);
@@ -158,6 +249,7 @@ export default function PosView({ items }: PosViewProps) {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
+              aria-pressed={activeCategory === "ALL"}
               onClick={() => setActiveCategory("ALL")}
               className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
                 activeCategory === "ALL"
@@ -171,6 +263,7 @@ export default function PosView({ items }: PosViewProps) {
               <button
                 key={category}
                 type="button"
+                aria-pressed={activeCategory === category}
                 onClick={() => setActiveCategory(category)}
                 className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
                   activeCategory === category
@@ -204,20 +297,26 @@ export default function PosView({ items }: PosViewProps) {
                     {item.name}
                   </p>
                   <div className="flex flex-col gap-1.5">
-                    {item.variations.map((variation) => (
-                      <button
-                        key={variation.id}
-                        type="button"
-                        disabled={typeof variation.price !== "number"}
-                        onClick={() => addToCart(item, variation)}
-                        className="flex items-center justify-between rounded-lg bg-zinc-100 px-3 py-2 text-left text-sm font-medium text-black transition-colors hover:bg-zinc-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-800 dark:text-zinc-50 dark:hover:bg-zinc-700"
-                      >
-                        <span>{variation.name ?? "Regular"}</span>
-                        {typeof variation.price === "number" && (
-                          <span className="font-semibold">{formatPrice(variation.price)}</span>
-                        )}
-                      </button>
-                    ))}
+                    {item.variations.map((variation) => {
+                      const hasPrice = typeof variation.price === "number";
+                      return (
+                        <button
+                          key={variation.id}
+                          type="button"
+                          disabled={!hasPrice}
+                          title={hasPrice ? undefined : "No price set for this variation"}
+                          onClick={() => addToCart(item, variation)}
+                          className="flex items-center justify-between rounded-lg bg-zinc-100 px-3 py-2 text-left text-sm font-medium text-black transition-colors hover:bg-zinc-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-800 dark:text-zinc-50 dark:hover:bg-zinc-700"
+                        >
+                          <span>{variation.name ?? "Regular"}</span>
+                          {hasPrice && (
+                            <span className="font-semibold">
+                              {formatPrice(variation.price!, currencyCode, locale)}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -245,8 +344,8 @@ export default function PosView({ items }: PosViewProps) {
 
         <div className="flex-1 overflow-y-auto px-4 py-3">
           {lines.length === 0 ? (
-            result?.type === "success" ? (
-              <div className="flex flex-col items-center gap-3 py-8 text-center">
+            result?.type === "success" || result?.type === "partial" ? (
+              <div className="flex flex-col items-center gap-3 py-8 text-center" role="status" aria-live="polite">
                 <div className="flex h-14 w-14 items-center justify-center rounded-full bg-green-100 dark:bg-green-900">
                   <svg
                     viewBox="0 0 24 24"
@@ -264,9 +363,16 @@ export default function PosView({ items }: PosViewProps) {
                 </div>
                 <div>
                   <p className="text-lg font-semibold text-black dark:text-zinc-50">
-                    Order placed and paid!
+                    {result.type === "partial"
+                      ? "Order recorded - payment not confirmed"
+                      : result.paymentRecorded
+                        ? "Order recorded (simulated payment)"
+                        : "Order recorded (no payment written)"}
                   </p>
                   <p className="text-sm text-zinc-600 dark:text-zinc-400">{result.total}</p>
+                  {result.type === "partial" && (
+                    <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">{result.message}</p>
+                  )}
                   <p className="mt-1 font-mono text-xs text-zinc-400 dark:text-zinc-500">
                     {result.orderId}
                   </p>
@@ -281,7 +387,7 @@ export default function PosView({ items }: PosViewProps) {
             <ul className="flex flex-col divide-y divide-black/5 dark:divide-white/10">
               {lines.map((line) => (
                 <li
-                  key={line.variationId}
+                  key={line.cartKey}
                   className="flex items-center justify-between gap-2 py-3 first:pt-0 last:pb-0"
                 >
                   <div className="min-w-0">
@@ -290,15 +396,15 @@ export default function PosView({ items }: PosViewProps) {
                       {line.variationName ? ` (${line.variationName})` : ""}
                     </p>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      {formatPrice(line.unitPrice)} × {line.quantity} ={" "}
-                      {formatPrice(line.unitPrice * line.quantity)}
+                      {formatPrice(line.unitPrice, currencyCode, locale)} × {line.quantity} ={" "}
+                      {formatPrice(line.unitPrice * line.quantity, currencyCode, locale)}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <button
                       type="button"
                       aria-label={`Decrease quantity of ${line.itemName}`}
-                      onClick={() => updateQuantity(line.variationId, -1)}
+                      onClick={() => updateQuantity(line.cartKey, -1)}
                       className="flex h-7 w-7 items-center justify-center rounded-full border border-black/10 text-black transition-colors hover:bg-black/5 dark:border-white/15 dark:text-zinc-50 dark:hover:bg-white/10"
                     >
                       −
@@ -309,7 +415,7 @@ export default function PosView({ items }: PosViewProps) {
                     <button
                       type="button"
                       aria-label={`Increase quantity of ${line.itemName}`}
-                      onClick={() => updateQuantity(line.variationId, 1)}
+                      onClick={() => updateQuantity(line.cartKey, 1)}
                       className="flex h-7 w-7 items-center justify-center rounded-full border border-black/10 text-black transition-colors hover:bg-black/5 dark:border-white/15 dark:text-zinc-50 dark:hover:bg-white/10"
                     >
                       +
@@ -322,23 +428,40 @@ export default function PosView({ items }: PosViewProps) {
         </div>
 
         <div className="flex flex-col gap-3 border-t border-black/10 px-4 py-4 dark:border-white/10">
-          {result?.type === "success" && lines.length === 0 ? (
-            <button
-              type="button"
-              onClick={() => setResult(null)}
-              className="flex h-12 w-full items-center justify-center rounded-full bg-foreground text-base font-semibold text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc]"
-            >
-              Start new order
-            </button>
+          {(result?.type === "success" || result?.type === "partial") && lines.length === 0 ? (
+            <>
+              {result.type === "partial" && result.retryable && (
+                <button
+                  type="button"
+                  onClick={retryPayment}
+                  disabled={placing}
+                  className="flex h-12 w-full items-center justify-center rounded-full bg-foreground text-base font-semibold text-background transition-colors hover:bg-foreground-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {placing ? "Retrying…" : `Retry payment (${result.total})`}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={clearCart}
+                disabled={placing}
+                className={
+                  result.type === "partial" && result.retryable
+                    ? "flex h-9 w-full items-center justify-center rounded-full border border-black/10 text-sm font-medium text-black transition-colors hover:bg-black/[.04] disabled:opacity-50 dark:border-white/15 dark:text-zinc-50 dark:hover:bg-white/[.06]"
+                    : "flex h-12 w-full items-center justify-center rounded-full bg-foreground text-base font-semibold text-background transition-colors hover:bg-foreground-hover"
+                }
+              >
+                Start new order
+              </button>
+            </>
           ) : (
             <>
               <div className="flex items-center justify-between text-base font-semibold text-black dark:text-zinc-50">
                 <span>Total</span>
-                <span>{formatPrice(total)}</span>
+                <span>{formatPrice(total, currencyCode, locale)}</span>
               </div>
 
               {result?.type === "error" && (
-                <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+                <p role="alert" aria-live="assertive" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
                   {result.message}
                 </p>
               )}
@@ -347,9 +470,11 @@ export default function PosView({ items }: PosViewProps) {
                 type="button"
                 onClick={placeOrder}
                 disabled={lines.length === 0 || placing}
-                className="flex h-12 w-full items-center justify-center rounded-full bg-foreground text-base font-semibold text-background transition-colors hover:bg-[#383838] disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-[#ccc]"
+                className="flex h-12 w-full items-center justify-center rounded-full bg-foreground text-base font-semibold text-background transition-colors hover:bg-foreground-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {placing ? "Processing…" : `Charge ${formatPrice(total)}`}
+                {placing
+                  ? "Processing…"
+                  : `${paymentWritesEnabled ? "Charge" : "Place order"} ${formatPrice(total, currencyCode, locale)}`}
               </button>
               {lines.length > 0 && (
                 <button

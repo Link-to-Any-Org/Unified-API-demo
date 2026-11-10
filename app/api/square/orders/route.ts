@@ -1,103 +1,146 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
   createOrder,
   createOrderPayment,
-  listRecentOrders,
-  type CreateOrderLineItem,
-} from "@/lib/uniflow";
+  resolveOrderLineItems,
+  MAX_LINE_ITEMS,
+  type RequestedLineItem,
+} from "@/lib/linktoany";
 import { getSession } from "@/lib/session";
+import { getConfig } from "@/lib/config";
+import { ValidationError } from "@/lib/errors";
+import { logger } from "@/lib/logger";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { DEFAULT_CURRENCY } from "@/lib/currency";
+import { BodyTooLargeError, readBodyWithLimit } from "@/lib/read-body";
+import { paymentExternalIdFor } from "@/lib/idempotency";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.uniflowAccountId) {
-    return NextResponse.json(
-      { error: "Not connected to Square" },
-      { status: 401 }
-    );
-  }
-
-  try {
-    const orders = await listRecentOrders(session.uniflowAccountId);
-    return NextResponse.json({ orders });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to list orders";
-    return NextResponse.json({ error: message }, { status: 502 });
-  }
-}
+const MAX_BODY_BYTES = 16 * 1024;
 
 interface CreateOrderRequestBody {
-  currencyCode?: string;
-  lineItems?: CreateOrderLineItem[];
+  idempotencyKey?: string;
+  lineItems?: unknown;
 }
 
-function isValidLineItem(item: unknown): item is CreateOrderLineItem {
+function isRequestedLineItem(item: unknown): item is RequestedLineItem {
   if (typeof item !== "object" || item === null) return false;
   const candidate = item as Record<string, unknown>;
-  const hasIdentity =
-    typeof candidate.variationExternalId === "string" ||
-    typeof candidate.name === "string";
   return (
-    hasIdentity &&
-    typeof candidate.quantity === "number" &&
-    typeof candidate.unitPrice === "number"
+    typeof candidate.variationExternalId === "string" &&
+    candidate.variationExternalId.length > 0 &&
+    typeof candidate.quantity === "number"
   );
 }
 
 export async function POST(request: NextRequest) {
+  const requestId = randomUUID();
   const session = await getSession();
-  if (!session.uniflowAccountId) {
-    return NextResponse.json(
-      { error: "Not connected to Square" },
-      { status: 401 }
-    );
+  const accountId = session.linkToAnyAccountId;
+
+  if (!accountId) {
+    return NextResponse.json({ error: "Not connected to Square" }, { status: 401 });
+  }
+
+  if (!checkRateLimit(accountId)) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
+
+  // Fast reject on an honest Content-Length; the real cap is enforced while
+  // reading, since chunked requests don't send the header at all.
+  const contentLength = Number(request.headers.get("content-length") ?? "0");
+  if (contentLength > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: "Request body too large" }, { status: 413 });
   }
 
   let body: CreateOrderRequestBody;
   try {
-    body = await request.json();
-  } catch {
+    const parsed: unknown = JSON.parse(await readBodyWithLimit(request.body, MAX_BODY_BYTES));
+    // `null`, a number, a string or an array are all valid JSON but not a
+    // request body; reading `.idempotencyKey` off `null` would throw.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+    body = parsed as CreateOrderRequestBody;
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) {
+      return NextResponse.json({ error: "Request body too large" }, { status: 413 });
+    }
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  if (!Array.isArray(body.lineItems) || body.lineItems.length === 0) {
+  if (typeof body.idempotencyKey !== "string" || body.idempotencyKey.length < 8 || body.idempotencyKey.length > 128) {
     return NextResponse.json(
-      { error: "lineItems is required and must be a non-empty array" },
+      { error: "idempotencyKey is required and must be an 8-128 character string" },
       { status: 400 }
     );
   }
 
-  if (!body.lineItems.every(isValidLineItem)) {
+  if (
+    !Array.isArray(body.lineItems) ||
+    body.lineItems.length === 0 ||
+    body.lineItems.length > MAX_LINE_ITEMS ||
+    !body.lineItems.every(isRequestedLineItem)
+  ) {
     return NextResponse.json(
       {
-        error:
-          "Each line item needs a numeric quantity and unitPrice, and either variationExternalId or name",
+        error: `lineItems must be a non-empty array of up to ${MAX_LINE_ITEMS} items, each with a variationExternalId and a numeric quantity`,
       },
       { status: 400 }
     );
   }
 
-  try {
-    const order = await createOrder(
-      session.uniflowAccountId,
-      body.lineItems,
-      body.currencyCode
-    );
+  const currencyCode = session.currencyCode ?? DEFAULT_CURRENCY;
 
-    if (order.total > 0) {
-      await createOrderPayment(
-        session.uniflowAccountId,
-        order.id,
-        order.total,
-        order.currencyCode
+  try {
+    const lineItems = await resolveOrderLineItems(accountId, currencyCode, body.lineItems);
+    const order = await createOrder(accountId, body.idempotencyKey, lineItems, currencyCode);
+    const orderResult = { orderId: order.id, total: order.total, currencyCode: order.currencyCode };
+
+    // Hard gate: with payment writes disabled the order is all that's
+    // written - no payment record is ever sent to Square.
+    if (!getConfig().paymentWritesEnabled || order.total <= 0) {
+      return NextResponse.json({ ...orderResult, paymentRecorded: false }, { status: 201 });
+    }
+
+    // Derived from the idempotency key, never minted per request: a retry of
+    // the same checkout (say, after a dropped response) must reuse the same
+    // payment externalId, or the Unified API would record a second capture
+    // against an order it had just upserted.
+    const paymentExternalId = paymentExternalIdFor(body.idempotencyKey);
+    try {
+      await createOrderPayment(accountId, order.id, paymentExternalId, order.total, order.currencyCode);
+    } catch (err) {
+      logger.error("square.orders.payment_failed", { requestId, accountId, orderId: order.id, err });
+      // Keep what's needed to retry just the payment in the sealed session, so
+      // the retry can't change the amount and reuses the same payment id.
+      session.pendingPayment = {
+        orderId: order.id,
+        paymentExternalId,
+        amount: order.total,
+        currencyCode: order.currencyCode,
+      };
+      await session.save();
+      // Order exists but the payment write failed - a distinct status so the
+      // client can tell "nothing happened" apart from "order placed, payment
+      // did not go through", and offer a payment retry.
+      return NextResponse.json(
+        {
+          ...orderResult,
+          paymentRecorded: false,
+          retryable: true,
+          error: "Order was created but recording the payment failed",
+        },
+        { status: 207 }
       );
     }
 
-    return NextResponse.json(
-      { orderId: order.id, total: order.total, currencyCode: order.currencyCode },
-      { status: 201 }
-    );
+    return NextResponse.json({ ...orderResult, paymentRecorded: true }, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to create order";
-    return NextResponse.json({ error: message }, { status: 502 });
+    if (err instanceof ValidationError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    logger.error("square.orders.create_failed", { requestId, accountId, err });
+    return NextResponse.json({ error: "Failed to create order" }, { status: 502 });
   }
 }

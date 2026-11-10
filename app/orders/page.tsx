@@ -1,33 +1,26 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
-import { listRecentOrders } from "@/lib/uniflow";
+import { listRecentOrders, RECENT_ORDERS_MAX_DAYS } from "@/lib/linktoany";
+import { formatPrice } from "@/lib/currency";
+import { getRequestLocale } from "@/lib/request-locale";
+import OrderTimestamp from "./order-timestamp";
 
-function formatPrice(amount: number, currency = "USD"): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-  }).format(amount);
-}
-
-function formatDate(iso?: string): string {
-  if (!iso) return "";
-  return new Date(iso).toLocaleString();
-}
+// Reads the session cookie and the account's live order list on every
+// request - stays a plain blocking route rather than being restructured
+// around Suspense boundaries for Cache Components.
+export const instant = false;
 
 export default async function OrdersPage() {
   const session = await getSession();
-  if (!session.uniflowAccountId) {
+  if (!session.linkToAnyAccountId) {
     redirect("/");
   }
 
-  let orders: Awaited<ReturnType<typeof listRecentOrders>> = [];
-  let errorMessage: string | null = null;
-  try {
-    orders = await listRecentOrders(session.uniflowAccountId);
-  } catch (err) {
-    errorMessage = err instanceof Error ? err.message : "Failed to load orders";
-  }
+  const [orders, locale] = await Promise.all([
+    listRecentOrders(session.linkToAnyAccountId),
+    getRequestLocale(),
+  ]);
 
   return (
     <div className="flex flex-1 flex-col items-center bg-zinc-50 px-6 py-8 dark:bg-black">
@@ -51,19 +44,11 @@ export default async function OrdersPage() {
           </Link>
         </div>
 
-        {errorMessage && (
-          <p className="rounded-md bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-            {errorMessage}
-          </p>
-        )}
-
-        {!errorMessage && orders.length === 0 && (
+        {orders.length === 0 ? (
           <p className="text-zinc-600 dark:text-zinc-400">
-            No orders yet. Place one from the POS screen.
+            No orders in the last {RECENT_ORDERS_MAX_DAYS} days. Place one from the POS screen.
           </p>
-        )}
-
-        {!errorMessage && orders.length > 0 && (
+        ) : (
           <ul className="flex flex-col gap-3">
             {orders.map((order) => (
               <li
@@ -76,7 +61,7 @@ export default async function OrdersPage() {
                       {order.id}
                     </p>
                     <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                      {formatDate(order.createdAt)}
+                      <OrderTimestamp iso={order.createdAt} />
                       {order.status ? ` · ${order.status}` : ""}
                     </p>
                     <ul className="mt-2 text-sm text-black dark:text-zinc-50">
@@ -89,7 +74,7 @@ export default async function OrdersPage() {
                   </div>
                   <div className="shrink-0 text-right text-sm font-medium text-black dark:text-zinc-50">
                     {typeof order.total === "number" &&
-                      formatPrice(order.total, order.currencyCode)}
+                      formatPrice(order.total, order.currencyCode, locale)}
                   </div>
                 </div>
               </li>
