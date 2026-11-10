@@ -35,13 +35,13 @@ export function accountSystemId(account: AccountSystemRef): string | undefined {
 }
 
 // The callback can name any account id in the organisation, so before an
-// account is trusted it has to be one of this integration's Square accounts,
+// account is trusted it has to be an account on this integration's configured system,
 // however it was looked up.
 export function assertAccountOnSystem(account: AccountSystemRef, systemId: string): void {
   const actual = accountSystemId(account);
   if (actual !== systemId) {
     throw new ValidationError(
-      `Account belongs to system ${actual ?? "(unknown)"}, not the configured Square system`
+      `Account belongs to system ${actual ?? "(unknown)"}, not the configured system`
     );
   }
 }

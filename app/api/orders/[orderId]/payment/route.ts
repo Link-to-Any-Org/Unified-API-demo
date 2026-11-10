@@ -1,13 +1,13 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createOrderPayment } from "@/lib/linktoany";
-import { getSession } from "@/lib/session";
+import { connectedAccountId, getSession } from "@/lib/session";
 import { getConfig } from "@/lib/config";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 // Retries only the payment write for an order whose payment failed (the 207
-// case of POST /api/square/orders). Amount, currency and the payment's own
+// case of POST /api/orders). Amount, currency and the payment's own
 // externalId all come from the sealed session, never from the request, so
 // this can't be used to charge a different amount or capture twice.
 export async function POST(
@@ -16,10 +16,10 @@ export async function POST(
 ) {
   const requestId = randomUUID();
   const session = await getSession();
-  const accountId = session.linkToAnyAccountId;
+  const accountId = connectedAccountId(session);
 
   if (!accountId) {
-    return NextResponse.json({ error: "Not connected to Square" }, { status: 401 });
+    return NextResponse.json({ error: "Not connected" }, { status: 401 });
   }
 
   if (!checkRateLimit(accountId)) {
@@ -45,7 +45,7 @@ export async function POST(
       pending.currencyCode
     );
   } catch (err) {
-    logger.error("square.orders.payment_retry_failed", { requestId, accountId, orderId, err });
+    logger.error("orders.payment_retry_failed", { requestId, accountId, orderId, err });
     return NextResponse.json(
       { orderId, retryable: true, error: "Recording the payment failed again" },
       { status: 502 }

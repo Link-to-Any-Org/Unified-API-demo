@@ -3,10 +3,14 @@ import { connection } from "next/server";
 import { getIronSession, type SessionOptions } from "iron-session";
 import { getConfig } from "@/lib/config";
 
-export interface SquareSessionData {
-  // The connected account id returned by the Unified API once Square OAuth
+export interface SessionData {
+  // The connected account id returned by the Unified API once the connection
   // completes - what every records.list/create call is scoped to.
   linkToAnyAccountId?: string;
+  // The system that account belongs to. Pointing LINKTOANY_SYSTEM_ID at a
+  // different system must not leave a session for the old one working, so the
+  // account is only honoured while this still matches - see connectedAccountId().
+  systemId?: string;
   merchantName?: string;
   currencyCode?: string;
   // Set when an order was created but its payment write failed, so the
@@ -28,13 +32,20 @@ export interface SquareSessionData {
 function buildSessionOptions(): SessionOptions {
   return {
     password: getConfig().sessionSecret,
-    cookieName: "square_session",
+    cookieName: "pos_session",
     cookieOptions: {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
     },
   };
+}
+
+// The connected account id, or undefined when the session is empty or was
+// connected to a different system than the one currently configured.
+export function connectedAccountId(session: SessionData): string | undefined {
+  if (!session.linkToAnyAccountId) return undefined;
+  return session.systemId === getConfig().linkToAnySystemId ? session.linkToAnyAccountId : undefined;
 }
 
 export async function getSession() {
@@ -44,5 +55,5 @@ export async function getSession() {
   // time - `instant = false` alone doesn't cover this. `connection()` makes
   // that explicit right before the call that reaches it.
   await connection();
-  return getIronSession<SquareSessionData>(await cookies(), buildSessionOptions());
+  return getIronSession<SessionData>(await cookies(), buildSessionOptions());
 }

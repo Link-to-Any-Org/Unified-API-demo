@@ -1,8 +1,8 @@
 {
-  "name": "linktoany-square-pos-demo",
+  "name": "linktoany-pos-demo",
   "version": "0.1.0",
   "private": true,
-  "description": "Square POS demo built on the LinkToAny Unified API.",
+  "description": "A system-agnostic POS demo built on the LinkToAny Unified API.",
   "engines": {
     "node": ">=22.12.0"
   },

@@ -157,7 +157,7 @@ export default function PosView({ items, currencyCode, locale, paymentWritesEnab
     setPlacing(true);
     setResult(null);
     try {
-      const response = await fetch("/api/square/orders", {
+      const response = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -213,7 +213,7 @@ export default function PosView({ items, currencyCode, locale, paymentWritesEnab
     setPlacing(true);
     try {
       const response = await fetch(
-        `/api/square/orders/${encodeURIComponent(pending.orderId)}/payment`,
+        `/api/orders/${encodeURIComponent(pending.orderId)}/payment`,
         { method: "POST" }
       );
       const data = await parseJsonResponse(response);

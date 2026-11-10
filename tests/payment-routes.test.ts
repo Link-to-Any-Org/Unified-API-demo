@@ -15,6 +15,7 @@ interface FakeSession {
 const state = vi.hoisted(() => ({
   session: undefined as unknown as FakeSession,
   paymentWritesEnabled: true,
+  systemCanRecordPayments: true,
 }));
 
 const linktoany = vi.hoisted(() => ({
@@ -23,7 +24,15 @@ const linktoany = vi.hoisted(() => ({
   createOrderPayment: vi.fn(),
 }));
 
-vi.mock("@/lib/session", () => ({ getSession: async () => state.session }));
+vi.mock("@/lib/session", () => ({
+  getSession: async () => state.session,
+  connectedAccountId: (session: FakeSession) => session.linkToAnyAccountId,
+}));
+vi.mock("@/lib/system-profile", () => ({
+  getSystemProfile: async () => ({
+    capabilities: { pos: true, listOrders: true, payments: state.systemCanRecordPayments },
+  }),
+}));
 vi.mock("@/lib/config", () => ({
   getConfig: () => ({ paymentWritesEnabled: state.paymentWritesEnabled }),
 }));
@@ -31,11 +40,11 @@ vi.mock("@/lib/rate-limit", () => ({ checkRateLimit: () => true }));
 vi.mock("@/lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("@/lib/linktoany", () => ({ ...linktoany, MAX_LINE_ITEMS: 50 }));
 
-const { POST: createOrderRoute } = await import("@/app/api/square/orders/route");
-const { POST: retryPaymentRoute } = await import("@/app/api/square/orders/[orderId]/payment/route");
+const { POST: createOrderRoute } = await import("@/app/api/orders/route");
+const { POST: retryPaymentRoute } = await import("@/app/api/orders/[orderId]/payment/route");
 
 function orderRequest() {
-  return new NextRequest("http://localhost/api/square/orders", {
+  return new NextRequest("http://localhost/api/orders", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -47,7 +56,7 @@ function orderRequest() {
 
 function retry(orderId: string) {
   return retryPaymentRoute(
-    new NextRequest(`http://localhost/api/square/orders/${orderId}/payment`, { method: "POST" }),
+    new NextRequest(`http://localhost/api/orders/${orderId}/payment`, { method: "POST" }),
     { params: Promise.resolve({ orderId }) }
   );
 }
@@ -55,21 +64,51 @@ function retry(orderId: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   state.paymentWritesEnabled = true;
+  state.systemCanRecordPayments = true;
   state.session = { linkToAnyAccountId: "acct_1", currencyCode: "USD", save: vi.fn() };
   linktoany.resolveOrderLineItems.mockResolvedValue([
     { variationExternalId: "VAR1", name: "Tea", quantity: 2, unitPrice: 60 },
   ]);
-  linktoany.createOrder.mockResolvedValue({ id: "ORDER_1", total: 120, currencyCode: "USD" });
+  linktoany.createOrder.mockResolvedValue({ id: "ORDER_1", idIsNative: true, total: 120, currencyCode: "USD" });
   linktoany.createOrderPayment.mockResolvedValue(undefined);
 });
 
-describe("POST /api/square/orders", () => {
+describe("POST /api/orders", () => {
   it("writes no payment when payment writes are disabled", async () => {
     state.paymentWritesEnabled = false;
     const res = await createOrderRoute(orderRequest());
     expect(res.status).toBe(201);
     expect(await res.json()).toMatchObject({ orderId: "ORDER_1", paymentRecorded: false });
     expect(linktoany.createOrderPayment).not.toHaveBeenCalled();
+  });
+
+  it("writes no payment when the system has no payment write", async () => {
+    state.systemCanRecordPayments = false;
+    const res = await createOrderRoute(orderRequest());
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({ orderId: "ORDER_1", paymentRecorded: false });
+    expect(linktoany.createOrderPayment).not.toHaveBeenCalled();
+  });
+
+  it("tells the order write whether a payment will follow, so the note is truthful", async () => {
+    await createOrderRoute(orderRequest());
+    expect(linktoany.createOrder).toHaveBeenLastCalledWith("acct_1", "idem-key-12345678", expect.any(Array), "USD", {
+      recordsPayment: true,
+    });
+    state.systemCanRecordPayments = false;
+    await createOrderRoute(orderRequest());
+    expect(linktoany.createOrder).toHaveBeenLastCalledWith("acct_1", "idem-key-12345678", expect.any(Array), "USD", {
+      recordsPayment: false,
+    });
+  });
+
+  it("does not offer a payment retry when the platform's order id could not be read", async () => {
+    linktoany.createOrder.mockResolvedValueOnce({ id: "idem-key-12345678", idIsNative: false, total: 120, currencyCode: "USD" });
+    linktoany.createOrderPayment.mockRejectedValueOnce(new Error("unknown order"));
+    const res = await createOrderRoute(orderRequest());
+    expect(res.status).toBe(207);
+    expect(await res.json()).toMatchObject({ paymentRecorded: false, retryable: false });
+    expect(state.session.pendingPayment).toBeUndefined();
   });
 
   it("records the payment when enabled", async () => {
@@ -119,7 +158,7 @@ describe("POST /api/square/orders", () => {
   });
 });
 
-describe("POST /api/square/orders/[orderId]/payment (retry)", () => {
+describe("POST /api/orders/[orderId]/payment (retry)", () => {
   const pending = { orderId: "ORDER_1", paymentExternalId: "pay-fixed-id", amount: 120, currencyCode: "USD" };
 
   it("full flow: failed payment, then a retry that reuses the same payment id and amount", async () => {

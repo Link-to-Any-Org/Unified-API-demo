@@ -1,13 +1,13 @@
 const DEFAULT_CURRENCY = "USD";
 // Fallback only. Prices are formatted in the viewer's own language (from the
 // request's Accept-Language - see lib/request-locale.ts) and the merchant's
-// currency; the unified Square location carries a currency but no language.
+// currency; the unified location carries a currency but no language.
 const DEFAULT_LOCALE = "en-US";
 
 // The unified order/payment write contracts take decimal currency units
 // (e.g. unitPrice: 9.97), not integer minor units, and Square rounds
 // sub-cent amounts to the nearest cent on write (see
-// docs/square-integration-notes.md). So amounts are rounded to the
+// docs/integration-notes.md). So amounts are rounded to the
 // currency's own precision before sending, rather than converted to minor
 // units - that would misinterpret every amount by 100x.
 export function currencyPrecision(currencyCode: string): number {

@@ -1,6 +1,6 @@
-// Square returns unified order reads oldest first, and a busy (or heavily
-// tested) merchant can have hundreds of orders in a month - so "the first
-// page" is the oldest orders, not the newest. The read is bounded with
+// Some systems (Square, confirmed live) return unified order reads oldest
+// first, and a busy (or heavily tested) merchant can have hundreds of orders
+// in a month - so "the first page" is the oldest orders, not the newest. The read is bounded with
 // `since` instead, starting with a narrow window and widening only until
 // there are enough records to fill the list.
 

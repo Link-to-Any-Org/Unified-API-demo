@@ -13,7 +13,8 @@
 4. Keep changes scoped - this is a small demo app, not a framework. Prefer
    the simplest change that fixes the problem over new abstractions.
 5. If your change touches the order/payment flow, re-read
-   `docs/square-integration-notes.md` first: several of this integration's
+   `docs/integration-notes.md` first: several of this integration's
    behaviors (payment status, idempotency, totals) were confirmed by live
    testing against Square, not derived from documentation, and are easy to
-   silently break.
+   silently break. Anything system-specific belongs behind the system
+   profile (`lib/system-profile.ts`), not hard-coded for one system.

@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
+import { connectedAccountId, getSession } from "@/lib/session";
 import { disconnectAccount, getReturnUrl } from "@/lib/linktoany";
 import { logger } from "@/lib/logger";
 
@@ -8,7 +8,7 @@ export async function POST() {
   const requestId = randomUUID();
   const appOrigin = new URL(getReturnUrl()).origin;
   const session = await getSession();
-  const accountId = session.linkToAnyAccountId;
+  const accountId = connectedAccountId(session);
 
   if (accountId) {
     try {
@@ -18,7 +18,7 @@ export async function POST() {
       // than silently reusing a still-live account.
       await disconnectAccount(accountId);
     } catch (err) {
-      logger.error("square.disconnect.failed", { requestId, accountId, err });
+      logger.error("connect.disconnect.failed", { requestId, accountId, err });
     }
   }
   session.destroy();

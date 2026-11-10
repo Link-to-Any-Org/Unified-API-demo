@@ -1,9 +1,13 @@
-// One-off discovery script: finds Square's systemId/application slug on the
-// Unified API and prints the exact unified schema for the 'item' and
-// 'order' entities, so the app's field mapping can be confirmed instead of
-// guessed.
+// Discovery script for any system on the Unified API.
 //
-// Usage: npm run linktoany:discover
+//   npm run linktoany:discover                 # list the systems on the platform
+//   npm run linktoany:discover -- clover       # list systems whose name contains "clover"
+//   LINKTOANY_SYSTEM_ID=<id> npm run linktoany:discover
+//                                              # describe one system: how it connects,
+//                                              # which unified entities it supports and
+//                                              # whether this demo's POS flow applies
+//
+// Read-only: it never creates, changes or deletes anything.
 
 import { LinkToAny } from "@linktoany/sdk";
 
@@ -23,90 +27,83 @@ const client = new LinkToAny({
 });
 
 console.log(`Base URL: ${client.baseUrl}`);
-const health = await client.health();
-console.log("Health:", health);
+console.log("Health:", await client.health());
 
-console.log("\n=== Paging through all integrations, looking for 'square' ===");
-const allIntegrations = [];
-for (let page = 1; page <= 50; page++) {
-  const { data } = await client.integrations.list({ page, limit: 100 });
-  if (data.length === 0) break;
-  allIntegrations.push(...data);
-  if (data.length < 100) break;
-}
-console.log(`Fetched ${allIntegrations.length} integrations total.`);
+const systemId = process.env.LINKTOANY_SYSTEM_ID || process.env.LINKTOANY_SQUARE_SYSTEM_ID;
 
-const matches = allIntegrations.filter((i) => i.name?.toLowerCase().includes("square"));
-if (matches.length === 0) {
-  console.log("No integration name contains 'square'. All names:");
-  for (const integ of allIntegrations) {
-    console.log(`- ${integ.name} | systemId: ${integ._id} | applicationSlug: ${integ.applicationSlug}`);
-  }
-} else {
-  for (const integ of matches) {
-    console.log(JSON.stringify(integ, null, 2));
-  }
-}
-
-const systemId = process.env.LINKTOANY_SQUARE_SYSTEM_ID || matches[0]?._id;
 if (!systemId) {
-  console.log("\nSet LINKTOANY_SQUARE_SYSTEM_ID (from the list above) and re-run to see entity docs.");
+  const filter = process.argv[2]?.toLowerCase();
+  const systems = (await client.integrations.listAll({ status: "active" })).filter(
+    (system) => !filter || system.name?.toLowerCase().includes(filter)
+  );
+  console.log(`\n${systems.length} active system(s)${filter ? ` matching "${filter}"` : ""}:`);
+  for (const system of systems) {
+    console.log(
+      `- ${system.name} | systemId: ${system._id} | auth: ${(system.supportedAuthTypes ?? []).join(", ") || "?"}`
+    );
+  }
+  console.log("\nSet LINKTOANY_SYSTEM_ID to one of the ids above and re-run to describe it.");
   process.exit(0);
 }
 
-console.log(`\n=== docs.describeIntegration(${systemId}) ===`);
-const docs = await client.docs.describeIntegration(systemId);
-console.log("Integration:", docs.integration?.name, docs.integration?.supportedAuthTypes);
-if (docs.warnings.length > 0) {
-  console.log("Warnings:", docs.warnings);
+const { data: integration } = await client.integrations.get(systemId);
+console.log(`\n=== ${integration.name} (${systemId}) ===`);
+console.log("Supported auth types:", integration.supportedAuthTypes);
+
+console.log("\n=== How it connects ===");
+try {
+  const requirements = await client.auth.getLinkRequirements(systemId);
+  console.log("mode:", requirements.mode, "| auth type:", requirements.authType, "| application:", requirements.application);
+  console.log(
+    "fields:",
+    requirements.requiredFields.map((field) => `${field.sourceField}${field.isUnique ? " (unique)" : ""}`)
+  );
+  console.log("credential sets:", requirements.availableApplications.map((app) => app.application));
+} catch (err) {
+  console.log(
+    "Cannot connect yet:",
+    err.message,
+    "\n(The Unified API has no shared default credential set - register one for this system under Client credentials in the LinkToAny dashboard.)"
+  );
 }
+
+console.log("\n=== Unified entities (from contracts) ===");
+const { data: contracts } = await client.entities.list({ systemIds: [systemId] });
+const enabled = (mappings) => (mappings ?? []).some((m) => m.systemId === systemId && m.enabled !== false);
+const entities = contracts
+  .map((contract) => ({
+    entityType: contract.entityType,
+    read: enabled(contract.readMappings),
+    write: enabled(contract.writeMappings),
+  }))
+  .filter((entity) => entity.read || entity.write)
+  .sort((a, b) => a.entityType.localeCompare(b.entityType));
+if (entities.length === 0) {
+  console.log("none - this system has no unified contracts yet, so only raw operations exist (see below).");
+}
+for (const entity of entities) {
+  console.log(`- ${entity.entityType}: ${[entity.read && "read", entity.write && "write"].filter(Boolean).join(", ")}`);
+}
+
+const find = (entityType) => entities.find((entity) => entity.entityType === entityType);
+console.log("\n=== Does this demo's flow apply? ===");
+console.log("POS screens (item read + order write):", Boolean(find("item")?.read && find("order")?.write));
+console.log("Orders list (order read):", Boolean(find("order")?.read));
+console.log("Payments (payment write):", Boolean(find("payment")?.write));
+
+console.log("\n=== docs.describeIntegration: raw entities and filters ===");
+const docs = await client.docs.describeIntegration(systemId);
+if (docs.warnings.length > 0) console.log("Warnings:", docs.warnings);
 for (const entity of docs.entities) {
   console.log(
-    `\n- entityType: ${entity.entityType} | readable: ${entity.readable} | writable: ${entity.writable}`
+    `- ${entity.entityType} | readable: ${entity.readable} | writable: ${entity.writable} | filters: ${
+      entity.filters.map((f) => `${f.paramName} (${f.type})`).join(", ") || "none"
+    }`
   );
-  console.log("  filters:", entity.filters.map((f) => `${f.paramName} (${f.type})`));
 }
 
-console.log("\n=== Unified entity contracts (schemas) for 'item' and 'order' ===");
-const { data: contracts } = await client.entities.list({ systemIds: [systemId] });
-for (const entityType of ["item", "order"]) {
+console.log("\n=== Unified contract schemas for the entities the POS flow uses ===");
+for (const entityType of ["item", "order", "payment"]) {
   const contract = contracts.find((c) => c.entityType === entityType);
-  if (!contract) {
-    console.log(`\n[${entityType}] No contract found for this systemId.`);
-    continue;
-  }
-  console.log(`\n[${entityType}] unifiedZodSchema:\n${contract.unifiedZodSchema}`);
-  console.log(`[${entityType}] readMappings:`, contract.readMappings);
-  console.log(`[${entityType}] writeMappings:`, contract.writeMappings);
-}
-
-console.log("\n=== Raw read operations for this systemId ===");
-const { data: readOps } = await client.integrations.listReadOperations({ systemId });
-for (const op of readOps) {
-  console.log(`- entityType: ${op.entityType} | name: ${op.name} | ${op.description ?? ""}`);
-}
-
-console.log("\n=== Raw write operations for this systemId ===");
-const { data: writeOps } = await client.integrations.listWriteOperations({ systemId });
-for (const op of writeOps) {
-  console.log(`- entityType: ${op.entityType} | action: ${op.action} | name: ${op.name} | ${op.description ?? ""}`);
-}
-
-console.log("\n=== Full detail for catalog_item / order / payment write operations ===");
-for (const entityType of ["catalog_item", "order", "payment"]) {
-  const op = writeOps.find((o) => o.entityType === entityType);
-  if (!op) {
-    console.log(`\n[${entityType}] no write operation found.`);
-    continue;
-  }
-  const { data: detail } = await client.integrations.getWriteOperation(op._id);
-  console.log(`\n[${entityType}]`, JSON.stringify(detail, null, 2));
-}
-
-console.log("\n=== Schema templates / Zod schemas for catalog_item, order, payment ===");
-for (const entityType of ["catalog_item", "order", "payment"]) {
-  const { data: template } = await client.integrations.getSchemaTemplates({ entityType });
-  console.log(`\n[${entityType}] schema template:`, JSON.stringify(template, null, 2));
-  const { data: zod } = await client.integrations.getZodSchemas({ entityType });
-  console.log(`[${entityType}] zod schema:`, JSON.stringify(zod, null, 2));
+  console.log(`\n[${entityType}]`, contract ? `\n${contract.unifiedZodSchema}` : "no contract for this system");
 }

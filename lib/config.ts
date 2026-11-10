@@ -4,18 +4,21 @@ export interface AppConfig {
   linkToAnyApiKey: string;
   linkToAnyOrganisationId?: string;
   linkToAnyEnvironment: LinkToAnyEnvironment;
-  linkToAnySquareSystemId: string;
-  // Name of the Square credential set (LinkToAny "application") to connect
-  // through. Without it LinkToAny picks one for the API key itself, which
-  // with several sets on the organisation may not be the one you configured.
-  linkToAnySquareApplication?: string;
+  // The integration (LinkToAny "system") this deployment connects to. Changing
+  // it is all it takes to point the app at a different system - everything
+  // else (name, how to connect, which screens apply) is discovered from it.
+  linkToAnySystemId: string;
+  // Name of the credential set (LinkToAny "application") to connect through.
+  // Without it LinkToAny picks one for the API key itself, which with several
+  // sets registered for the system may not be the one you configured.
+  linkToAnyApplication?: string;
   linkToAnyReturnUrl: string;
   sessionSecret: string;
   // Hard gate on the payment write. Off unless ENABLE_PAYMENT_WRITES is
-  // exactly "true": with it off, placing an order creates the Square order
-  // only and never writes a payment record. This app can't tell a Square
-  // sandbox merchant from a production one, so the operator has to opt in
-  // explicitly rather than the app guessing from the LinkToAny environment.
+  // exactly "true": with it off, placing an order creates the order only and
+  // never writes a payment record. This app can't tell a sandbox merchant
+  // from a production one, so the operator has to opt in explicitly rather
+  // than the app guessing from the LinkToAny environment.
   paymentWritesEnabled: boolean;
 }
 
@@ -26,6 +29,13 @@ let config: AppConfig | undefined;
 function readEnv(name: string): string | undefined {
   const value = process.env[name];
   return value ? value : undefined;
+}
+
+// The system/application variables used to be Square-specific. The old names
+// still work so an existing .env.local keeps running; the new name wins when
+// both are set.
+function readEnvWithLegacy(name: string, legacyName: string): string | undefined {
+  return readEnv(name) ?? readEnv(legacyName);
 }
 
 export function loadConfig(): AppConfig {
@@ -39,7 +49,8 @@ export function loadConfig(): AppConfig {
   }
 
   const linkToAnyApiKey = required("LINKTOANY_API_KEY");
-  const linkToAnySquareSystemId = required("LINKTOANY_SQUARE_SYSTEM_ID");
+  const linkToAnySystemId = readEnvWithLegacy("LINKTOANY_SYSTEM_ID", "LINKTOANY_SQUARE_SYSTEM_ID");
+  if (!linkToAnySystemId) missing.push("LINKTOANY_SYSTEM_ID");
   const linkToAnyReturnUrl = required("LINKTOANY_RETURN_URL");
   const sessionSecret = required("SESSION_SECRET");
 
@@ -74,8 +85,8 @@ export function loadConfig(): AppConfig {
     linkToAnyApiKey,
     linkToAnyOrganisationId: readEnv("LINKTOANY_ORGANISATION_ID"),
     linkToAnyEnvironment: rawEnvironment as LinkToAnyEnvironment,
-    linkToAnySquareSystemId,
-    linkToAnySquareApplication: readEnv("LINKTOANY_SQUARE_APPLICATION"),
+    linkToAnySystemId: linkToAnySystemId ?? "",
+    linkToAnyApplication: readEnvWithLegacy("LINKTOANY_APPLICATION", "LINKTOANY_SQUARE_APPLICATION"),
     linkToAnyReturnUrl,
     sessionSecret,
     paymentWritesEnabled: readEnv("ENABLE_PAYMENT_WRITES") === "true",
