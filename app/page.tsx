@@ -106,12 +106,15 @@ export default async function Home({
     <div className="flex flex-1 items-center justify-center bg-zinc-50 dark:bg-black">
       <main className="flex w-full max-w-md flex-col items-center gap-6 rounded-xl border border-black/10 bg-white p-10 text-center shadow-sm dark:border-white/10 dark:bg-zinc-900">
         <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
-          {profile.name} demo
+          Unified API POS demo
         </h1>
         <p className="text-zinc-600 dark:text-zinc-400">
           {capabilities.pos
-            ? `Connect your ${profile.name} account through the LinkToAny Unified API to browse its catalog and take demo orders.`
-            : `Connect your ${profile.name} account through the LinkToAny Unified API.`}
+            ? `Connect a ${profile.name} account through the LinkToAny Unified API to browse its catalog and take demo orders.`
+            : `Connect a ${profile.name} account through the LinkToAny Unified API.`}
+        </p>
+        <p className="text-xs text-zinc-500 dark:text-zinc-500">
+          Configured system: {profile.name}
         </p>
 
         {message && (

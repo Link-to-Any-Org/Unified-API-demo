@@ -205,7 +205,13 @@ async function getPrimaryLocation(accountId: string): Promise<RawLocation | unde
     });
     return data.find((location) => location.status === "ACTIVE") ?? data[0];
   } catch (err) {
-    logger.warn("connect.location_lookup_failed", { accountId, err });
+    // Most systems have no `location` entity at all; the Unified API answers
+    // that with a validation error, which is expected and not worth a stack.
+    if (err instanceof SdkValidationError) {
+      logger.info("connect.location_unsupported", { accountId });
+    } else {
+      logger.warn("connect.location_lookup_failed", { accountId, err });
+    }
     return undefined;
   }
 }
@@ -398,8 +404,18 @@ export async function resolveOrderLineItems(
 
 export interface CreatedOrder {
   id: string;
+  // True when `id` is the platform's own order id, read from the create
+  // response. False when it is the app's externalId used as a stand-in,
+  // which a payment write may not accept.
+  idIsNative: boolean;
   total: number;
   currencyCode: string;
+}
+
+export interface CreateOrderOptions {
+  // Whether the caller will record a payment for this order. Only affects the
+  // note the merchant sees on the order.
+  recordsPayment: boolean;
 }
 
 // `externalId` is the client-supplied idempotency key, reused as-is so a
@@ -409,7 +425,8 @@ export async function createOrder(
   accountId: string,
   externalId: string,
   lineItems: ResolvedLineItem[],
-  currencyCode: string
+  currencyCode: string,
+  { recordsPayment }: CreateOrderOptions
 ): Promise<CreatedOrder> {
   const total = computeOrderTotal(lineItems, currencyCode);
 
@@ -418,8 +435,8 @@ export async function createOrder(
     currencyCode,
     status: "OPEN",
     // The note lands in the merchant's POS dashboard, so it must say what
-    // actually happened: with payment writes off there is no tender at all.
-    note: getConfig().paymentWritesEnabled
+    // actually happened: without a payment write there is no tender at all.
+    note: recordsPayment
       ? "Demo POS order - simulated cash tender, see README"
       : "Demo POS order - no payment recorded, see README",
     // Line ids derive from the order's idempotency key too, so a retried
@@ -440,12 +457,11 @@ export async function createOrder(
   // recognise, fall back to our externalId rather than failing an order that
   // already exists - a wrong id then surfaces as a retryable payment failure,
   // not a duplicate order - and say so in the log.
-  let orderId = extractCreatedRecordId(result.data, "order");
-  if (!orderId) {
+  const nativeId = extractCreatedRecordId(result.data, "order");
+  if (!nativeId) {
     logger.warn("orders.native_id_missing", { accountId });
-    orderId = externalId;
   }
-  return { id: orderId, total, currencyCode };
+  return { id: nativeId ?? externalId, idIsNative: Boolean(nativeId), total, currencyCode };
 }
 
 // Always a simulated cash tender - see docs/integration-notes.md for

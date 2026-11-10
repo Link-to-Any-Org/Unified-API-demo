@@ -39,11 +39,11 @@ const FORM_PLAN = {
   ],
 };
 
-function submit(fields: Record<string, string>) {
+function submit(fields: Record<string, string>, fetchSite = "same-origin") {
   return POST(
     new NextRequest("http://localhost/api/connect/credentials", {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
+      headers: { "content-type": "application/x-www-form-urlencoded", "sec-fetch-site": fetchSite },
       body: new URLSearchParams(fields).toString(),
     })
   );
@@ -63,6 +63,14 @@ beforeEach(() => {
 });
 
 describe("POST /api/connect/credentials", () => {
+  it("refuses a form posted from another site, so nobody can be logged into an attacker's account", async () => {
+    const res = await submit({ merchantId: "M1", personalToken: SECRET }, "cross-site");
+    expect(location(res)).toBe("/?error=connect_failed");
+    expect(linktoany.connectWithCredentials).not.toHaveBeenCalled();
+    expect(storeConnection).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith("connect.credentials.cross_site", expect.any(Object));
+  });
+
   it("connects with only the fields the system asked for, then lands on the stored path", async () => {
     const res = await submit({ merchantId: "M1", personalToken: SECRET, extra: "ignored" });
     expect(res.status).toBe(303);

@@ -143,3 +143,10 @@ describe("GET /api/connect/callback/[state]", () => {
     expect(linktoany.verifyConnection).not.toHaveBeenCalled();
   });
 });
+
+describe("legacy /api/square/callback path", () => {
+  it("answers with the same handler, so return URLs registered before the rename keep working", async () => {
+    const alias = await import("@/app/api/square/callback/[state]/route");
+    expect(alias.GET).toBe(GET);
+  });
+});

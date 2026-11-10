@@ -28,11 +28,21 @@ export interface SystemProfile {
 // Only genuine "this system can't be connected" answers are cached. A
 // transient failure (network, 5xx) throws and is retried on the next request.
 export async function getSystemProfile(): Promise<SystemProfile> {
+  const { linkToAnySystemId, linkToAnyApplication } = getConfig();
+  return loadSystemProfile(linkToAnySystemId, linkToAnyApplication);
+}
+
+// The system and application are arguments, not read from config inside, so
+// they are part of the cache key: a cached profile can never outlive a change
+// of LINKTOANY_SYSTEM_ID and describe the previous system.
+async function loadSystemProfile(
+  systemId: string,
+  linkToAnyApplication: string | undefined
+): Promise<SystemProfile> {
   "use cache";
   cacheLife("minutes");
-  cacheTag("system-profile");
+  cacheTag(`system-profile:${systemId}`);
 
-  const { linkToAnySystemId: systemId, linkToAnyApplication } = getConfig();
   const client = getLinkToAnyClient();
 
   const [integration, contracts, connect] = await Promise.all([

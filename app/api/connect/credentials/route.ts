@@ -8,6 +8,7 @@ import { getSystemProfile } from "@/lib/system-profile";
 import { logger } from "@/lib/logger";
 import { checkRateLimit, clientRateLimitKey } from "@/lib/rate-limit";
 import { BodyTooLargeError, readBodyWithLimit } from "@/lib/read-body";
+import { isSameOriginRequest } from "@/lib/same-origin";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_FIELD_LENGTH = 1024;
@@ -30,6 +31,15 @@ export async function POST(request: NextRequest) {
   // blunts credential guessing.
   if (!checkRateLimit(clientRateLimitKey(request))) {
     return redirectTo(appOrigin, "/?error=too_many_attempts");
+  }
+
+  // No session is needed to reach this route, and its response sets one. A
+  // form posted from another site therefore could log the visitor into an
+  // account the attacker controls (login CSRF), so only the app's own form
+  // is accepted.
+  if (!isSameOriginRequest(request)) {
+    logger.warn("connect.credentials.cross_site", { requestId });
+    return redirectTo(appOrigin, "/?error=connect_failed");
   }
 
   let submitted: URLSearchParams;

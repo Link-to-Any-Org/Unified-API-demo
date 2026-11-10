@@ -135,9 +135,11 @@ Fill in `.env.local`:
   the one you configured). A name that doesn't exist fails the connect with
   the list of available sets in the server log. The older
   `LINKTOANY_SQUARE_APPLICATION` name is still read as a fallback.
-- `LINKTOANY_RETURN_URL` - where LinkToAny sends the merchant back after OAuth;
-  must match what's registered for your credential set
-  (`<your-origin>/api/connect/callback`). Only used by hosted-consent systems.
+- `LINKTOANY_RETURN_URL` - required for every system: its origin is the app's
+  public address, which every redirect is built from. For hosted-consent
+  systems it is also where LinkToAny sends the merchant back after OAuth, so
+  it must then match what's registered for your credential set
+  (`<your-origin>/api/connect/callback`).
 - `SESSION_SECRET` - generate with:
   ```bash
   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
@@ -231,6 +233,9 @@ Systems that connect with credentials don't need the tunnel.
 - No database - the session (an encrypted, httpOnly cookie via
   `iron-session`) is the only state. Nothing survives clearing cookies,
   including a pending payment retry.
+- Upgrading from the Square-only version signs everyone out: the session
+  cookie was renamed (`square_session` to `pos_session`) and sessions now
+  record their system, so every operator reconnects once after deploying.
 - Only Square has been exercised live. For other systems the unified schemas
   match, but connect behaviour, the shape of the order-create response (used
   to find the platform's own order id for the payment), paging and `since`

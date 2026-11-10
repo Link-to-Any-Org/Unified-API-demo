@@ -69,7 +69,7 @@ beforeEach(() => {
   linktoany.resolveOrderLineItems.mockResolvedValue([
     { variationExternalId: "VAR1", name: "Tea", quantity: 2, unitPrice: 60 },
   ]);
-  linktoany.createOrder.mockResolvedValue({ id: "ORDER_1", total: 120, currencyCode: "USD" });
+  linktoany.createOrder.mockResolvedValue({ id: "ORDER_1", idIsNative: true, total: 120, currencyCode: "USD" });
   linktoany.createOrderPayment.mockResolvedValue(undefined);
 });
 
@@ -88,6 +88,27 @@ describe("POST /api/orders", () => {
     expect(res.status).toBe(201);
     expect(await res.json()).toMatchObject({ orderId: "ORDER_1", paymentRecorded: false });
     expect(linktoany.createOrderPayment).not.toHaveBeenCalled();
+  });
+
+  it("tells the order write whether a payment will follow, so the note is truthful", async () => {
+    await createOrderRoute(orderRequest());
+    expect(linktoany.createOrder).toHaveBeenLastCalledWith("acct_1", "idem-key-12345678", expect.any(Array), "USD", {
+      recordsPayment: true,
+    });
+    state.systemCanRecordPayments = false;
+    await createOrderRoute(orderRequest());
+    expect(linktoany.createOrder).toHaveBeenLastCalledWith("acct_1", "idem-key-12345678", expect.any(Array), "USD", {
+      recordsPayment: false,
+    });
+  });
+
+  it("does not offer a payment retry when the platform's order id could not be read", async () => {
+    linktoany.createOrder.mockResolvedValueOnce({ id: "idem-key-12345678", idIsNative: false, total: 120, currencyCode: "USD" });
+    linktoany.createOrderPayment.mockRejectedValueOnce(new Error("unknown order"));
+    const res = await createOrderRoute(orderRequest());
+    expect(res.status).toBe(207);
+    expect(await res.json()).toMatchObject({ paymentRecorded: false, retryable: false });
+    expect(state.session.pendingPayment).toBeUndefined();
   });
 
   it("records the payment when enabled", async () => {

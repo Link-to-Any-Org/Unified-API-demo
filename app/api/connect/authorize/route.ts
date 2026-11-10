@@ -5,6 +5,7 @@ import { getSession } from "@/lib/session";
 import { getSystemProfile } from "@/lib/system-profile";
 import { logger } from "@/lib/logger";
 import { checkRateLimit, clientRateLimitKey } from "@/lib/rate-limit";
+import { isSameOriginRequest } from "@/lib/same-origin";
 
 // Starts a hosted-consent (OAuth) connection. Systems that connect with the
 // merchant's own credentials go through /api/connect/credentials instead.
@@ -21,6 +22,14 @@ export async function POST(request: NextRequest) {
   if (!checkRateLimit(clientRateLimitKey(request))) {
     logger.warn("connect.authorize.rate_limited", { requestId });
     return NextResponse.redirect(new URL("/?error=too_many_attempts", appOrigin), 303);
+  }
+
+  // Only the app's own Connect button may start a flow: a cross-site POST
+  // would plant a state nonce in the visitor's session and send them off to
+  // the provider without them having asked.
+  if (!isSameOriginRequest(request)) {
+    logger.warn("connect.authorize.cross_site", { requestId });
+    return NextResponse.redirect(new URL("/?error=connect_failed", appOrigin), 303);
   }
 
   try {
