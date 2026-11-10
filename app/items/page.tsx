@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/session";
+import { connectedAccountId, getSession } from "@/lib/session";
+import { getSystemProfile } from "@/lib/system-profile";
 import { listCategories, listCatalogItems, resolveItemCategory, type CatalogItem } from "@/lib/linktoany";
 import { DEFAULT_CURRENCY } from "@/lib/currency";
 import { getRequestLocale } from "@/lib/request-locale";
@@ -15,21 +16,31 @@ export const instant = false;
 
 export default async function ItemsPage() {
   const session = await getSession();
-  if (!session.linkToAnyAccountId) {
+  const accountId = connectedAccountId(session);
+  if (!accountId) {
     redirect("/");
   }
 
-  const { paymentWritesEnabled } = getConfig();
+  // A system without a catalog and order writes has nothing for this screen
+  // to show; the home screen explains what it does support.
+  const profile = await getSystemProfile();
+  if (!profile.capabilities.pos) {
+    redirect("/");
+  }
+
+  // Payments are only offered when both the operator opted in and the system
+  // can actually record one.
+  const paymentWritesEnabled = getConfig().paymentWritesEnabled && profile.capabilities.payments;
   const [rawItems, categories, locale] = await Promise.all([
-    listCatalogItems(session.linkToAnyAccountId),
-    listCategories(session.linkToAnyAccountId),
+    listCatalogItems(accountId),
+    listCategories(accountId),
     getRequestLocale(),
   ]);
 
   const items: Array<CatalogItem & { category?: string }> = rawItems.map((item) => {
-    // POS grouping/reporting should follow Square's REGULAR category, not
+    // POS grouping/reporting should follow the REGULAR category, not
     // whichever category (possibly a MENU/online-ordering one) happened to
-    // be mapped first - see docs/square-integration-notes.md.
+    // be mapped first - see docs/integration-notes.md.
     const categoryId = resolveItemCategory(item.categoryExternalIds, categories, "REGULAR");
     return {
       ...item,
@@ -52,12 +63,14 @@ export default async function ItemsPage() {
             )}
           </div>
           <div className="flex items-center gap-4">
-            <Link
-              href="/orders"
-              className="text-sm font-medium text-zinc-600 underline hover:text-black dark:text-zinc-400 dark:hover:text-zinc-50"
-            >
-              Orders
-            </Link>
+            {profile.capabilities.listOrders && (
+              <Link
+                href="/orders"
+                className="text-sm font-medium text-zinc-600 underline hover:text-black dark:text-zinc-400 dark:hover:text-zinc-50"
+              >
+                Orders
+              </Link>
+            )}
             <Link
               href="/"
               className="text-sm font-medium text-zinc-600 underline hover:text-black dark:text-zinc-400 dark:hover:text-zinc-50"
@@ -75,14 +88,19 @@ export default async function ItemsPage() {
             <>
               Payment writes are <strong>on</strong>: placing an order writes a
               real, immediately captured (simulated cash) payment against the
-              connected Square account. No card is charged, but the capture
-              can&apos;t be refunded from this app - only use a disposable
-              Square account.
+              connected {profile.name} account. No card is charged, but the
+              capture can&apos;t be refunded from this app - only use a
+              disposable {profile.name} account.
+            </>
+          ) : !profile.capabilities.payments ? (
+            <>
+              {profile.name} has no payment write in the Unified API, so
+              placing an order creates the order only, with no payment recorded.
             </>
           ) : (
             <>
               Payment writes are <strong>off</strong>: placing an order creates
-              the Square order only, with no payment recorded. Set{" "}
+              the {profile.name} order only, with no payment recorded. Set{" "}
               <code>ENABLE_PAYMENT_WRITES=true</code> to also write payments.
             </>
           )}

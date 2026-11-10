@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Square POS Demo",
-  description: "Connect your Square account and browse your item catalog.",
+  title: "Unified API POS Demo",
+  description: "Connect an account through the LinkToAny Unified API and browse its catalog.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

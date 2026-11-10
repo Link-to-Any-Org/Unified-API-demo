@@ -7,7 +7,8 @@ import {
   MAX_LINE_ITEMS,
   type RequestedLineItem,
 } from "@/lib/linktoany";
-import { getSession } from "@/lib/session";
+import { connectedAccountId, getSession } from "@/lib/session";
+import { getSystemProfile } from "@/lib/system-profile";
 import { getConfig } from "@/lib/config";
 import { ValidationError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
@@ -35,10 +36,10 @@ function isRequestedLineItem(item: unknown): item is RequestedLineItem {
 export async function POST(request: NextRequest) {
   const requestId = randomUUID();
   const session = await getSession();
-  const accountId = session.linkToAnyAccountId;
+  const accountId = connectedAccountId(session);
 
   if (!accountId) {
-    return NextResponse.json({ error: "Not connected to Square" }, { status: 401 });
+    return NextResponse.json({ error: "Not connected" }, { status: 401 });
   }
 
   if (!checkRateLimit(accountId)) {
@@ -91,8 +92,10 @@ export async function POST(request: NextRequest) {
     const orderResult = { orderId: order.id, total: order.total, currencyCode: order.currencyCode };
 
     // Hard gate: with payment writes disabled the order is all that's
-    // written - no payment record is ever sent to Square.
-    if (!getConfig().paymentWritesEnabled || order.total <= 0) {
+    // written - no payment record is ever sent. Also skipped when the system
+    // has no payment write at all, which would only ever fail.
+    const { capabilities } = await getSystemProfile();
+    if (!getConfig().paymentWritesEnabled || !capabilities.payments || order.total <= 0) {
       return NextResponse.json({ ...orderResult, paymentRecorded: false }, { status: 201 });
     }
 
@@ -100,7 +103,7 @@ export async function POST(request: NextRequest) {
     try {
       await createOrderPayment(accountId, order.id, paymentExternalId, order.total, order.currencyCode);
     } catch (err) {
-      logger.error("square.orders.payment_failed", { requestId, accountId, orderId: order.id, err });
+      logger.error("orders.payment_failed", { requestId, accountId, orderId: order.id, err });
       // Keep what's needed to retry just the payment in the sealed session, so
       // the retry can't change the amount and reuses the same payment id.
       session.pendingPayment = {
@@ -129,7 +132,7 @@ export async function POST(request: NextRequest) {
     if (err instanceof ValidationError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }
-    logger.error("square.orders.create_failed", { requestId, accountId, err });
+    logger.error("orders.create_failed", { requestId, accountId, err });
     return NextResponse.json({ error: "Failed to create order" }, { status: 502 });
   }
 }

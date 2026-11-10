@@ -11,8 +11,8 @@ jobs:
     env:
       LINKTOANY_API_KEY: ci-placeholder
       LINKTOANY_ENVIRONMENT: dev
-      LINKTOANY_SQUARE_SYSTEM_ID: ci-placeholder
-      LINKTOANY_RETURN_URL: https://ci.example.com/api/square/callback
+      LINKTOANY_SYSTEM_ID: ci-placeholder
+      LINKTOANY_RETURN_URL: https://ci.example.com/api/connect/callback
       SESSION_SECRET: ci-placeholder-ci-placeholder-ci-placeholder
     steps:
       - uses: actions/checkout@v4

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/session";
+import { connectedAccountId, getSession } from "@/lib/session";
+import { getSystemProfile } from "@/lib/system-profile";
 import { listRecentOrders, RECENT_ORDERS_MAX_DAYS } from "@/lib/linktoany";
 import { formatPrice } from "@/lib/currency";
 import { getRequestLocale } from "@/lib/request-locale";
@@ -13,14 +14,17 @@ export const instant = false;
 
 export default async function OrdersPage() {
   const session = await getSession();
-  if (!session.linkToAnyAccountId) {
+  const accountId = connectedAccountId(session);
+  if (!accountId) {
     redirect("/");
   }
 
-  const [orders, locale] = await Promise.all([
-    listRecentOrders(session.linkToAnyAccountId),
-    getRequestLocale(),
-  ]);
+  const profile = await getSystemProfile();
+  if (!profile.capabilities.listOrders) {
+    redirect("/");
+  }
+
+  const [orders, locale] = await Promise.all([listRecentOrders(accountId), getRequestLocale()]);
 
   return (
     <div className="flex flex-1 flex-col items-center bg-zinc-50 px-6 py-8 dark:bg-black">
@@ -37,16 +41,16 @@ export default async function OrdersPage() {
             )}
           </div>
           <Link
-            href="/items"
+            href={profile.capabilities.pos ? "/items" : "/"}
             className="text-sm font-medium text-zinc-600 underline hover:text-black dark:text-zinc-400 dark:hover:text-zinc-50"
           >
-            Back to POS
+            {profile.capabilities.pos ? "Back to POS" : "Back"}
           </Link>
         </div>
 
         {orders.length === 0 ? (
           <p className="text-zinc-600 dark:text-zinc-400">
-            No orders in the last {RECENT_ORDERS_MAX_DAYS} days. Place one from the POS screen.
+            No orders in the last {RECENT_ORDERS_MAX_DAYS} days. {profile.capabilities.pos ? "Place one from the POS screen." : ""}
           </p>
         ) : (
           <ul className="flex flex-col gap-3">
