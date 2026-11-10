@@ -11,7 +11,6 @@ export interface AppConfig {
   linkToAnySquareApplication?: string;
   linkToAnyReturnUrl: string;
   sessionSecret: string;
-  devTunnelOrigin?: string;
   // Hard gate on the payment write. Off unless ENABLE_PAYMENT_WRITES is
   // exactly "true": with it off, placing an order creates the Square order
   // only and never writes a payment record. This app can't tell a Square
@@ -79,7 +78,6 @@ export function loadConfig(): AppConfig {
     linkToAnySquareApplication: readEnv("LINKTOANY_SQUARE_APPLICATION"),
     linkToAnyReturnUrl,
     sessionSecret,
-    devTunnelOrigin: readEnv("DEV_TUNNEL_ORIGIN"),
     paymentWritesEnabled: readEnv("ENABLE_PAYMENT_WRITES") === "true",
   };
 }

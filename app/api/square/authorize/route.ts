@@ -1,15 +1,24 @@
 import { randomUUID } from "crypto";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createSquareConnectLink, getReturnUrl } from "@/lib/linktoany";
 import { getSession } from "@/lib/session";
 import { logger } from "@/lib/logger";
+import { checkRateLimit, clientRateLimitKey } from "@/lib/rate-limit";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   const requestId = randomUUID();
   // Build redirects from the registered return URL's origin rather than the
   // request URL, since the dev server may be reached through a tunnel whose
   // public hostname differs from its local bind address.
   const appOrigin = new URL(getReturnUrl()).origin;
+
+  // Nobody is signed in yet, so this is keyed by client address. Every call
+  // mints a connect link upstream with the organisation's API key, which is
+  // not something an anonymous loop should be able to do without limit.
+  if (!checkRateLimit(clientRateLimitKey(request))) {
+    logger.warn("square.authorize.rate_limited", { requestId });
+    return NextResponse.redirect(new URL("/?error=too_many_attempts", appOrigin), 303);
+  }
 
   try {
     const state = randomUUID();

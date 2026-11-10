@@ -1,12 +1,16 @@
-import { randomUUID } from "crypto";
 import { cacheLife, cacheTag } from "next/cache";
 import { LinkToAny, type Account } from "@linktoany/sdk";
 import { getConfig } from "@/lib/config";
 import { ValidationError } from "@/lib/errors";
 import { roundToCurrencyPrecision, DEFAULT_CURRENCY } from "@/lib/currency";
 import { assertConnectionIsFresh } from "@/lib/connection-freshness";
-import { pickMostRecentlyAuthorized } from "@/lib/account-selection";
+import {
+  accountSystemId,
+  assertAccountOnSystem,
+  pickMostRecentlyAuthorized,
+} from "@/lib/account-selection";
 import { collectRecentRecords } from "@/lib/recent-records";
+import { lineItemExternalIdFor } from "@/lib/idempotency";
 import { logger } from "@/lib/logger";
 import {
   assertLineItemCount,
@@ -93,12 +97,6 @@ export async function createSquareConnectLink(
   return { accountLinkUrl: link.accountLinkUrl };
 }
 
-function accountSystemId(account: Account): string | undefined {
-  const raw = account.systemId as unknown;
-  if (typeof raw === "string") return raw;
-  return (raw as { _id?: string } | undefined)?._id;
-}
-
 export async function findSquareAccountForMerchant(
   merchantId: string
 ): Promise<Account | undefined> {
@@ -117,14 +115,19 @@ export interface VerifiedConnection {
 }
 
 // Confirms the account the callback resolved is genuinely the one this flow
-// started: its platform merchant id matches what the callback reported, it
-// was (re)authorized after the flow began (not a stale connection), and
-// LinkToAny itself reports the connection active.
+// started: it is a Square account on the configured system, its platform
+// merchant id matches what the callback reported, it was (re)authorized
+// after the flow began (not a stale connection), and LinkToAny itself
+// reports the connection active. The callback's query string is under the
+// merchant's control, so every check here applies whichever parameter the
+// account was found by.
 export async function verifySquareConnection(
   account: Account,
   expectedMerchantId: string | undefined,
   flowStartedAt: Date
 ): Promise<VerifiedConnection> {
+  assertAccountOnSystem(account, getConfig().linkToAnySquareSystemId);
+
   if (expectedMerchantId && account.merchantId !== expectedMerchantId) {
     throw new ValidationError(
       `Account merchant id (${account.merchantId}) does not match the callback's merchant id (${expectedMerchantId})`
@@ -138,16 +141,25 @@ export async function verifySquareConnection(
 
   // A merchant reconnecting may get their existing LinkToAny account
   // re-authorized rather than a new one created, so `createdAt` alone would
-  // reject every reconnect. Freshness is judged on the latest of
-  // lastAuthAt / updatedAt / createdAt instead.
+  // reject every reconnect. `lastAuthAt` is LinkToAny's own record of the
+  // authorization this flow just completed, so when it is present it is the
+  // only timestamp that counts; `updatedAt` also moves on unrelated changes
+  // (a background token refresh, for one), so it and `createdAt` are only a
+  // fallback for an account that reports no lastAuthAt at all.
   assertConnectionIsFresh(
-    [status.data.lastAuthAt, account.updatedAt, account.createdAt],
+    status.data.lastAuthAt ? [status.data.lastAuthAt] : [account.updatedAt, account.createdAt],
     flowStartedAt
   );
 
   // `externalAccountInfo` only holds the OAuth token response for Square, so
   // display name and currency come from the unified `location` entity.
   const location = await getPrimaryLocation(account._id);
+  if (!location?.currency) {
+    logger.warn("square.connect.currency_defaulted", {
+      accountId: account._id,
+      currencyCode: DEFAULT_CURRENCY,
+    });
+  }
 
   return {
     account,
@@ -163,14 +175,16 @@ interface RawLocation {
 }
 
 // Best effort: a failed lookup falls back to defaults rather than failing an
-// otherwise verified connection.
+// otherwise verified connection - but it is logged, because the fallback
+// currency is wrong for every non-USD merchant.
 async function getPrimaryLocation(accountId: string): Promise<RawLocation | undefined> {
   try {
     const { data } = await getLinkToAnyClient().records.list<RawLocation>(accountId, "location", {
       pageSize: 10,
     });
     return data.find((location) => location.status === "ACTIVE") ?? data[0];
-  } catch {
+  } catch (err) {
+    logger.warn("square.location.lookup_failed", { accountId, err });
     return undefined;
   }
 }
@@ -244,6 +258,7 @@ export async function listCatalogItems(accountId: string): Promise<CatalogItem[]
   cacheTag(`catalog-items:${accountId}`);
 
   const items: CatalogItem[] = [];
+  let dropped = 0;
   for await (const raw of getLinkToAnyClient().records.iterate<RawItem>(
     accountId,
     ITEM_ENTITY_TYPE,
@@ -251,6 +266,12 @@ export async function listCatalogItems(accountId: string): Promise<CatalogItem[]
   )) {
     const item = normalizeCatalogItem(raw);
     if (item) items.push(item);
+    else dropped += 1;
+  }
+  if (dropped > 0) {
+    // Otherwise a catalog that comes back without ids looks like an empty
+    // merchant, with nothing in the logs to say why.
+    logger.warn("square.catalog.items_without_external_id", { accountId, dropped, kept: items.length });
   }
   return items;
 }
@@ -379,9 +400,15 @@ export async function createOrder(
     externalId,
     currencyCode,
     status: "OPEN",
-    note: "Demo POS order - simulated tender, see README",
-    lineItems: lineItems.map((item) => ({
-      externalId: randomUUID(),
+    // The note lands in the merchant's Square dashboard, so it must say what
+    // actually happened: with payment writes off there is no tender at all.
+    note: getConfig().paymentWritesEnabled
+      ? "Demo POS order - simulated cash tender, see README"
+      : "Demo POS order - no payment recorded, see README",
+    // Line ids derive from the order's idempotency key too, so a retried
+    // request upserts the same lines instead of adding a second set.
+    lineItems: lineItems.map((item, index) => ({
+      externalId: lineItemExternalIdFor(externalId, index),
       variationExternalId: item.variationExternalId,
       name: item.name,
       quantity: item.quantity,

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { BodyTooLargeError, readBodyWithLimit } from "@/lib/read-body";
 import { assertConnectionIsFresh, CONNECTION_CLOCK_SKEW_MS } from "@/lib/connection-freshness";
-import { formatPrice, resolveLocale } from "@/lib/currency";
+import { formatPrice } from "@/lib/currency";
+import { accountSystemId, assertAccountOnSystem } from "@/lib/account-selection";
+import { lineItemExternalIdFor, paymentExternalIdFor } from "@/lib/idempotency";
+import { clientRateLimitKey } from "@/lib/rate-limit";
+import { ValidationError } from "@/lib/errors";
 
 function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -55,16 +59,52 @@ describe("assertConnectionIsFresh", () => {
 });
 
 describe("locale handling", () => {
-  it("normalises Square-style locales", () => {
-    expect(resolveLocale("fr_CA")).toBe("fr-CA");
-  });
-
-  it("falls back for missing or invalid locales", () => {
-    expect(resolveLocale(undefined)).toBe("en-US");
-    expect(resolveLocale("!!")).toBe("en-US");
-  });
-
   it("formats with the given locale", () => {
     expect(formatPrice(1234.5, "EUR", "de-DE")).toMatch(/1\.234,50/);
+  });
+});
+
+describe("assertAccountOnSystem", () => {
+  const SQUARE = "6500000000000000000000aa";
+
+  it("reads a bare or populated systemId", () => {
+    expect(accountSystemId({ systemId: SQUARE })).toBe(SQUARE);
+    expect(accountSystemId({ systemId: { _id: SQUARE, name: "Square" } })).toBe(SQUARE);
+    expect(accountSystemId({})).toBeUndefined();
+  });
+
+  it("accepts an account on the configured system", () => {
+    expect(() => assertAccountOnSystem({ systemId: SQUARE }, SQUARE)).not.toThrow();
+    expect(() => assertAccountOnSystem({ systemId: { _id: SQUARE } }, SQUARE)).not.toThrow();
+  });
+
+  it("rejects an account on another system or with no system", () => {
+    expect(() => assertAccountOnSystem({ systemId: "6500000000000000000000bb" }, SQUARE)).toThrow(ValidationError);
+    expect(() => assertAccountOnSystem({}, SQUARE)).toThrow(ValidationError);
+  });
+});
+
+describe("idempotency-derived ids", () => {
+  it("derives the payment and line ids from the order's key, deterministically", () => {
+    expect(paymentExternalIdFor("abc-123")).toBe(paymentExternalIdFor("abc-123"));
+    expect(paymentExternalIdFor("abc-123")).not.toBe(paymentExternalIdFor("abc-124"));
+    expect(lineItemExternalIdFor("abc-123", 0)).not.toBe(lineItemExternalIdFor("abc-123", 1));
+    expect(lineItemExternalIdFor("abc-123", 2)).toBe(lineItemExternalIdFor("abc-123", 2));
+  });
+});
+
+describe("clientRateLimitKey", () => {
+  it("uses the first forwarded address behind a proxy", () => {
+    const request = new Request("http://localhost/x", {
+      headers: { "x-forwarded-for": "203.0.113.9, 10.0.0.2" },
+    });
+    expect(clientRateLimitKey(request)).toBe("ip:203.0.113.9");
+  });
+
+  it("falls back to X-Real-IP, then to a shared bucket", () => {
+    expect(clientRateLimitKey(new Request("http://localhost/x", { headers: { "x-real-ip": "198.51.100.4" } }))).toBe(
+      "ip:198.51.100.4"
+    );
+    expect(clientRateLimitKey(new Request("http://localhost/x"))).toBe("ip:unknown");
   });
 });

@@ -14,6 +14,7 @@ import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { DEFAULT_CURRENCY } from "@/lib/currency";
 import { BodyTooLargeError, readBodyWithLimit } from "@/lib/read-body";
+import { paymentExternalIdFor } from "@/lib/idempotency";
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -54,7 +55,13 @@ export async function POST(request: NextRequest) {
 
   let body: CreateOrderRequestBody;
   try {
-    body = JSON.parse(await readBodyWithLimit(request.body, MAX_BODY_BYTES));
+    const parsed: unknown = JSON.parse(await readBodyWithLimit(request.body, MAX_BODY_BYTES));
+    // `null`, a number, a string or an array are all valid JSON but not a
+    // request body; reading `.idempotencyKey` off `null` would throw.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+    body = parsed as CreateOrderRequestBody;
   } catch (err) {
     if (err instanceof BodyTooLargeError) {
       return NextResponse.json({ error: "Request body too large" }, { status: 413 });
@@ -96,7 +103,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ...orderResult, paymentRecorded: false }, { status: 201 });
     }
 
-    const paymentExternalId = randomUUID();
+    // Derived from the idempotency key, never minted per request: a retry of
+    // the same checkout (say, after a dropped response) must reuse the same
+    // payment externalId, or the Unified API would record a second capture
+    // against an order it had just upserted.
+    const paymentExternalId = paymentExternalIdFor(body.idempotencyKey);
     try {
       await createOrderPayment(accountId, order.id, paymentExternalId, order.total, order.currencyCode);
     } catch (err) {

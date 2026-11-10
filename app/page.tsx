@@ -7,6 +7,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   stale_link:
     "That Square sign-in link was already used or was started somewhere else. Close any other Square sign-in tabs, click Connect to Square, and finish signing in in the tab that opens.",
   not_verified: "We couldn't verify the Square connection. Please try again.",
+  too_many_attempts: "Too many connection attempts from this address. Wait a minute and try again.",
 };
 
 function errorMessageFor(code: string | undefined): string | undefined {

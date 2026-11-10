@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import { paymentExternalIdFor } from "@/lib/idempotency";
 
 // Route-level tests for the order -> payment -> retry path, with the Square
 // calls mocked so a payment failure can be simulated without real captures.
@@ -77,6 +78,29 @@ describe("POST /api/square/orders", () => {
     expect(await res.json()).toMatchObject({ orderId: "ORDER_1", total: 120, paymentRecorded: true });
     expect(linktoany.createOrderPayment).toHaveBeenCalledWith("acct_1", "ORDER_1", expect.any(String), 120, "USD");
     expect(state.session.pendingPayment).toBeUndefined();
+  });
+
+  it("uses the same payment id for a retried request with the same idempotency key", async () => {
+    await createOrderRoute(orderRequest());
+    await createOrderRoute(orderRequest());
+    const [first, second] = linktoany.createOrderPayment.mock.calls.map((call) => call[2]);
+    expect(first).toBe(second);
+    expect(first).toBe(paymentExternalIdFor("idem-key-12345678"));
+  });
+
+  it("rejects a JSON body that is not an object", async () => {
+    for (const raw of ["null", "42", '"text"', "[]"]) {
+      const res = await createOrderRoute(
+        new NextRequest("http://localhost/api/square/orders", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: raw,
+        })
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "Invalid JSON body" });
+    }
+    expect(linktoany.createOrder).not.toHaveBeenCalled();
   });
 
   it("returns 207 and keeps a retryable pending payment when the payment fails", async () => {

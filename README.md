@@ -135,6 +135,7 @@ URL. Then open the tunnel URL, click **Connect to Square**, and you'll land on
 | Placing an order returns `207` | The order was created but the payment write failed; the order id in the response is real and visible in `/orders`. The POS screen offers **Retry payment**, which re-sends only the payment with the same amount and payment id. |
 | Orders are created but no payment appears in Square | Expected unless `ENABLE_PAYMENT_WRITES=true`. |
 | Placing an order returns `429` | More than 30 order requests from this account within a minute (in-memory limiter, resets on redeploy). |
+| Redirected to `/?error=too_many_attempts` | More than 30 **Connect to Square** clicks from one client address within a minute (same in-memory limiter, keyed by `X-Forwarded-For` behind a tunnel or proxy; direct connections share one bucket). Wait a minute and try again. |
 | Buttons render but do nothing in dev (e.g. items can't be added to the cart); browser console shows `/_next/hmr` websocket failures | You're opening the app on a host Next doesn't allow as a dev origin, so the page never hydrates. Open it on `LINKTOANY_RETURN_URL`'s host (allowed automatically) or add the host to `DEV_TUNNEL_ORIGIN`, then restart `npm run dev`. |
 
 ## Known limitations

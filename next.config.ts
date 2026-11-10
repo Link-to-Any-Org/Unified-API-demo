@@ -5,11 +5,12 @@ import type { NextConfig } from "next";
 // through a tunnel, and the page never hydrates - buttons render but do
 // nothing. The OAuth return URL's host is always the public address the app
 // is used through, so it's allowed automatically; DEV_TUNNEL_ORIGIN can add
-// another host.
-function hostOf(url: string | undefined): string | undefined {
+// another host. Next matches entries against the request's hostname only and
+// wants them written without a port, so this takes `hostname`, not `host`.
+function hostnameOf(url: string | undefined): string | undefined {
   if (!url) return undefined;
   try {
-    return new URL(url).host;
+    return new URL(url).hostname;
   } catch {
     return undefined;
   }
@@ -17,7 +18,7 @@ function hostOf(url: string | undefined): string | undefined {
 
 const devOrigins = [
   process.env.DEV_TUNNEL_ORIGIN,
-  hostOf(process.env.LINKTOANY_RETURN_URL),
+  hostnameOf(process.env.LINKTOANY_RETURN_URL),
 ].filter((origin): origin is string => Boolean(origin));
 
 const nextConfig: NextConfig = {
