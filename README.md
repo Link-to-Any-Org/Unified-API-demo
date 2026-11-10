@@ -45,13 +45,49 @@ What that means for the 32 active systems on the platform as of Nov 10 2026
 | System | Unified contracts | Status |
 | --- | --- | --- |
 | Square | `item`, `order`, `payment`, `location`, `category`, ... | **Verified live**: connect, reconnect, order and payment. |
-| Clover US, Lightspeed K Series | Same `item`/`order`/`payment`/`location`/`category` schemas as Square (compared byte for byte) | POS screens appear. **Not tested live**: see [`docs/integration-notes.md`](docs/integration-notes.md) for what is unverified. |
+| Clover US | Same `item`/`order`/`payment`/`location`/`category` schemas as Square (compared byte for byte); has credential sets on this organisation | POS screens appear. **Not tested live**: see [`docs/integration-notes.md`](docs/integration-notes.md) for what is unverified. |
+| Lightspeed K Series | Same schemas as Square | Contracts exist, but this organisation has **no credential set** for it, so it can't be connected until one is registered. |
 | The other 29 (Shopify, Stripe, QBO, HubSpot, Brink POS, Revel, ...) | No `item`/`order` contracts (Shift4 Dine has only `product`) | Connect only; the home screen shows what the system exposes. |
 
 A system can only be connected if your organisation has registered a
 credential set for it (Client credentials in the LinkToAny dashboard). The
 Unified API has no shared default. Without one the home screen says so
 instead of offering a Connect button.
+
+### Adding another system
+
+No code changes are needed for a system the Unified API already supports:
+
+1. **Find it.** `npm run linktoany:discover -- <part of its name>` prints the
+   system id.
+2. **Check it can be connected.** `LINKTOANY_SYSTEM_ID=<id> npm run
+   linktoany:discover` prints how it connects (hosted consent or a credential
+   form, and which fields) and the credential sets on your organisation. If it
+   says it cannot connect yet, register a credential set for the system under
+   Client credentials in the LinkToAny dashboard and re-run.
+3. **Check what the demo can do with it.** The same output ends with whether
+   the POS screens (`item` read + `order` write), the orders list (`order`
+   read) and payments (`payment` write) apply. Anything it doesn't apply to is
+   simply not offered; the home screen lists what the system does expose.
+4. **Point the app at it.** In `.env.local` set `LINKTOANY_SYSTEM_ID`, and
+   `LINKTOANY_APPLICATION` if the system has more than one credential set. For
+   a hosted-consent system make sure `LINKTOANY_RETURN_URL` is
+   `<your-origin>/api/connect/callback`. Restart `npm run dev`.
+5. **Connect.** Open the app and connect (sign in at the provider, or fill in
+   the credential form). Only use a sandbox or test account, and leave
+   `ENABLE_PAYMENT_WRITES` off until you know the account is disposable.
+
+If a system has no unified `item`/`order` contracts, connecting works but the
+POS screens won't appear. Making it appear there is a Unified API change, not
+an app change: contracts are created with the SDK's `client.entities.upsert()`
+or `client.entities.generate()` (see the
+[SDK docs](https://github.com/Link-To-Any/unified-api-sdk)), after which the
+app picks them up within a few minutes.
+
+**One system per deployment.** The app talks to the single system named by
+`LINKTOANY_SYSTEM_ID`; it does not yet let one running instance connect to
+several systems side by side. To run several, deploy several instances with
+different values. A system picker would be a new feature.
 
 ## Request flow
 

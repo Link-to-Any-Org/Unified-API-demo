@@ -26,8 +26,10 @@ What was checked on Nov 10 2026, against the 32 active systems on the platform:
   credential set for it. On Nov 10 2026, `getLinkRequirements` succeeded for
   Square (`oauth_redirect`) and Clover US (`oauth_redirect`, unique field
   `merchantId`, four credential sets on this organisation) and failed with a
-  `ValidationError` for the others tried (Clover US Personal Token, Brink POS,
-  Stripe). Lightspeed K was not re-checked after returning a 503. The home
+  `ValidationError` for every other system tried (Clover US Personal Token, Brink
+  POS, Stripe, Shopify, Revel, Shift4 Dine, QBO and all three Lightspeed
+  series, including K Series, which has the contracts). So on this
+  organisation only Square and Clover US can be connected today. The home
   screen reports the missing-credential-set case instead of offering a Connect
   button.
 - A system connects in one of two modes (`getLinkRequirements().mode`):
