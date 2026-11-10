@@ -81,7 +81,7 @@ If a system has no unified `item`/`order` contracts, connecting works but the
 POS screens won't appear. Making it appear there is a Unified API change, not
 an app change: contracts are created with the SDK's `client.entities.upsert()`
 or `client.entities.generate()` (see the
-[SDK docs](https://github.com/Link-To-Any/unified-api-sdk)), after which the
+[SDK docs](https://github.com/Link-to-Any-Org/unified-api-sdk)), after which the
 app picks them up within a few minutes.
 
 **One system per deployment.** The app talks to the single system named by
