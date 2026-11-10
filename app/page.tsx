@@ -88,11 +88,14 @@ export default async function Home({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
-  const [session, profile, { error }] = await Promise.all([
-    getSession(),
-    getSystemProfile(),
-    searchParams,
-  ]);
+  // Request data first, the profile after. The profile is a cached call that
+  // doesn't depend on the request, so started alongside these it would run
+  // during `next build`'s prerender - and call LinkToAny with whatever
+  // credentials the build environment has. Awaiting cookies first keeps it
+  // out of the build.
+  const session = await getSession();
+  const { error } = await searchParams;
+  const profile = await getSystemProfile();
   const connected = Boolean(connectedAccountId(session));
   // Once connected there's no Connect button to have failed, so an `?error=`
   // here is a stale URL (back/forward history) - don't show it.
